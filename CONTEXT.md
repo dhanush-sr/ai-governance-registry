@@ -1,7 +1,7 @@
 # Project context and handoff
 
 Topic 32, **AI Governance Registry with Deployment Gates**. Submission **Option A** (public GitHub repo).
-Last updated 2026-11-02. About 35% done: the design is fixed and the core code is written, but **none of the gate code has been run yet**.
+Last updated 2026-11-03. About 90% done. Code, training, gate, tests, CI workflow, notebook, README and report draft all exist. What's left: finish the benchmark numbers in the report, build the PDF, push to GitHub (owner approval needed), and record the demo video.
 
 ---
 
@@ -100,6 +100,22 @@ A gate is `n/a` when the tier doesn't require it. A model deploys only if no gat
 ---
 
 ## 4. Current state of the files
+
+> **2026-11-03 update: the table below is outdated.** Done since then:
+> - dataset card written;
+> - `tests/test_governance.py` added (3 tests: risk tiers, metrics checked against fairlearn, gate decisions and tamper detection);
+> - two commits made;
+> - models trained (`income-fair.pkl` is 90 MB);
+> - the gate gives exactly the expected decisions, and `REGISTRY.md` is generated;
+> - added: `pipeline/benchmark_spark.py`, `.github/workflows/governance-gate.yml`, `Makefile`, `notebooks/results.ipynb`, `README.md`, `report/report.md` and `report/build_pdf.py`.
+>
+> Bugs fixed:
+> - the owner's shell exports `HADOOP_CONF_DIR` (HDFS on `localhost:9000`), so `fairness.spark()` now forces `fs.defaultFS=file:///`;
+> - YAML dates are now converted to strings in `gate.load`;
+> - pandas is pinned below 3 for PySpark;
+> - `pipeline.benchmark_spark` must be run with `-m` (from the repo root).
+
+## 4a. Original state (2026-11-02)
 
 | File | State |
 |---|---|

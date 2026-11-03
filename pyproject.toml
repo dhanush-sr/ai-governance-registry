@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=8", "ipykernel>=6", "nbconvert>=7"]
+dev = ["pytest>=8", "ipykernel>=6", "nbconvert>=7", "markdown>=3.6"]
 
 [tool.uv]
 package = false
