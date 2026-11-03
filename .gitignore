@@ -7,3 +7,4 @@ metastore_db/
 derby.log
 *.docx
 .DS_Store
+CONTEXT.md

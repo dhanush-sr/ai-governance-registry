@@ -69,11 +69,12 @@ Fairness by `RAC1P`: disparate impact **0.885**, equal-opportunity gap **0.054**
 - **Blocking issues:**
   - **documentation:** schema: `(root)` Additional properties are not allowed ('known_issues' was unexpected)
   - **documentation:** missing `limitations`
-  - **lineage:** training dataset `nyc-tlc-yellow-2023-01` has no dataset card in registry/datasets
+  - **lineage:** dataset `nyc-tlc-yellow-2023-01` missing `personal_data`
 
 ## Registered datasets
 
 | Dataset | Source | License | sha256 |
 |---|---|---|---|
 | `acs-income-ca-2018` | https://www2.census.gov/programs-surveys/acs/data/pums/2018/1-Year/csv_pca.zip | Public domain (US Government work, 17 U.S.C. 105); Census Bureau terms of use | `6194ade52892…` |
+| `nyc-tlc-yellow-2023-01` | https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet | NYC Open Data terms of use (public, free to reuse) | `32df6f67578f…` |
 

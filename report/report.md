@@ -65,7 +65,7 @@ The card also states `declared_tier`. A mismatch is a blocking error, which prev
 **Models.** Scenario: a fictional lender uses an income pre-screen to order credit applications for review (Annex III 5(b), high risk).
 - `income-baseline`: HistGradientBoosting with SEX and RAC1P removed from the inputs ("fairness through unawareness"), approved by a human reviewer.
 - `income-fair`: the same inputs, trained with fairlearn's ExponentiatedGradient under a demographic-parity constraint on SEX × RAC1P (bound 0.01).
-- `taxi-eta`: a trip-duration regressor (minimal risk) from a team that skipped registration.
+- `taxi-eta`: a trip-duration regressor (minimal risk) whose team skipped parts of the documentation.
 
 | Model | Accuracy | DI SEX | DI RAC1P | TPR gap SEX | TPR gap RAC1P | Gate |
 |---|---|---|---|---|---|---|
@@ -78,7 +78,7 @@ The card also states `declared_tier`. A mismatch is a blocking error, which prev
 **Findings.**
 - **Removing protected attributes did not remove the disparity.** Through proxies such as occupation, place of birth and hours worked, the baseline selects the "Some other race" group at 0.146, against 0.487 for Asian respondents. A human approver signed it off; the automated gate blocked it.
 - **The constraint fixes the disparity at a cost.** It brings every gated group into a 0.35–0.40 selection-rate band and also halves the TPR gap, at a cost of 7.8 accuracy points. The gate makes that trade-off explicit and recorded instead of implicit.
-- **`taxi-eta` is blocked for process reasons, not model quality:** an unofficial `known_issues` field instead of `limitations` (a schema error plus a missing field), and training data with no dataset card. Fairness and approval are `n/a` for its tier, which shows that the requirements scale with risk.
+- **`taxi-eta` is blocked for process reasons, not model quality:** an unofficial `known_issues` field instead of `limitations` (a schema error plus a missing field), and a training-data card whose privacy (`personal_data`) statement is still missing. Fairness and approval are `n/a` for its tier, which shows that the requirements scale with risk.
 - **A tamper test passes.** Rewriting `income-fair`'s predictions after training makes its lineage gate fail (`tests/test_governance.py`).
 
 ## 6. Big data: scaling the fairness audit

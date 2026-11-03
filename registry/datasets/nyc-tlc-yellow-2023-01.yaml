@@ -1,0 +1,22 @@
+id: nyc-tlc-yellow-2023-01
+name: NYC TLC yellow taxi trip records, January 2023
+description: >
+  One row per yellow-taxi trip in New York City in January 2023: pickup and
+  drop-off timestamps, taxi zones, distance, passenger count and fare fields.
+source:
+  url: https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2023-01.parquet
+  license: NYC Open Data terms of use (public, free to reuse)
+  sha256: 32df6f67578fa86c484a6b5ef23a5281992ff085521082340b0f9e5889e9a572
+  retrieved: 2026-10-29
+collection: >
+  Recorded automatically by taximeter and trip-record technology providers and
+  published monthly by the NYC Taxi and Limousine Commission.
+preprocessing: >
+  Trips of 1-180 minutes and 0.01-100 miles kept; features distance, pickup and
+  drop-off zone, pickup hour and weekday; 600k-trip random sample. Script:
+  pipeline/train_models.py
+known_biases: >
+  Covers yellow taxis only (not green taxis or ride-hail), so outer boroughs are
+  under-represented. Contains real data errors such as negative fares.
+rows: 3066766
+# personal_data: privacy review not completed yet, so the lineage gate blocks models trained on it

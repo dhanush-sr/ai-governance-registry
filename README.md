@@ -67,7 +67,7 @@ How the gates work:
 |---|---|---|---|
 | `income-fair` | high (Annex III 5(b), credit) | ✅ **DEPLOY** | Accuracy 0.747; race disparate impact 0.885; sex disparate impact 0.977 |
 | `income-baseline` | high (Annex III 5(b), credit) | ❌ **BLOCKED** (fairness) | Accuracy 0.825, but race disparate impact 0.299 and TPR gap 0.331, even though SEX and race are not inputs and a human approved it |
-| `taxi-eta` | minimal | ❌ **BLOCKED** (documentation, lineage) | No `limitations` (an unofficial `known_issues` field instead); its training dataset has no dataset card |
+| `taxi-eta` | minimal | ❌ **BLOCKED** (documentation, lineage) | No `limitations` (an unofficial `known_issues` field instead); its training dataset's card has no privacy (`personal_data`) statement yet |
 
 The full report is in [`REGISTRY.md`](REGISTRY.md).
 
