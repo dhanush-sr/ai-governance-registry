@@ -1,0 +1,54 @@
+id: income-fair
+name: Income eligibility pre-screen (fairness-constrained)
+version: 1.0.0
+owner: credit-ml-team@example.org
+model_type: >
+  fairlearn ExponentiatedGradient (demographic-parity constraint) over
+  scikit-learn HistGradientBoostingClassifier; randomized ensemble.
+description: >
+  Predicts whether an applicant's annual personal income exceeds USD 50,000
+  from employment and household survey answers. It feeds the affordability
+  pre-screen of a fictional consumer-credit application flow. Identical to
+  income-baseline except for the fairness constraint applied during training.
+intended_use:
+  primary_use: >
+    Order incoming credit applications for manual affordability review. A
+    positive prediction sends the application to a fast-track queue; no
+    application is declined by the model.
+  users: Credit underwriting analysts of the lending team.
+  out_of_scope: >
+    Automatic rejection of applicants. Use outside California or for years
+    other than 2018 without re-validation. Employment, insurance, housing or
+    public-benefit decisions.
+risk:
+  use_case: creditworthiness
+  interacts_with_people: false
+  generates_synthetic_content: false
+  declared_tier: high
+evaluation:
+  description: >
+    20% stratified hold-out of the California 2018 ACS income task. The CI
+    gate recomputes fairness from eval_predictions.parquet on every run;
+    accuracy is recorded in run.json by the training pipeline.
+sensitive_attributes: [SEX, RAC1P]
+limitations: >
+  Trained on one state and one survey year, so parity on the training
+  population does not guarantee parity elsewhere (see the at-scale audit in
+  notebooks/results.ipynb). Predictions are randomized across the ensemble,
+  so the same applicant can receive different outputs. Income above USD
+  50,000 is a proxy for affordability, not a measure of it.
+ethical_considerations: >
+  SEX and RAC1P are not model inputs. They are used only during training to
+  enforce demographic parity, which EU AI Act Art. 10(5) allows for bias
+  correction. Proxies such as occupation and place of birth remain in the
+  inputs. The constraint costs accuracy against income-baseline; the lending
+  team accepted that trade-off.
+human_oversight: >
+  Analysts review every application whatever the score; the model only
+  orders the queue. Analysts can override the queue, and overrides are
+  logged and reviewed monthly for disparate patterns.
+approval:
+  status: approved
+  approver: ai-governance-board@example.org
+  date: 2026-10-29
+  notes: Staged roll-out, with a quarterly fairness re-audit.

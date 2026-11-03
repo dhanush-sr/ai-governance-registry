@@ -1,0 +1,30 @@
+id: acs-income-ca-2018
+name: Folktables ACSIncome, California 2018
+description: >
+  Person records from the US Census Bureau 2018 ACS 1-year PUMS for California,
+  filtered and labelled with the Folktables ACSIncome task: predict whether
+  personal income exceeds USD 50,000.
+source:
+  url: https://www2.census.gov/programs-surveys/acs/data/pums/2018/1-Year/csv_pca.zip
+  license: Public domain (US Government work, 17 U.S.C. 105); Census Bureau terms of use
+  sha256: 6194ade52892ddb0e41903f7d3b49399842f08eeebd42e6b19ee8e417affbf79
+  retrieved: 2026-10-29
+collection: >
+  ACS is a continuous, mandatory household survey. PUMS is the public-use
+  microdata sample (about 1% of the population per year).
+preprocessing: >
+  Folktables adult_filter (AGEP > 16, PINCP > 100, WKHP > 0, PWGTP >= 1);
+  10 features AGEP COW SCHL MAR OCCP POBP RELP WKHP SEX RAC1P; label PINCP > 50000;
+  missing values coded -1. Script: pipeline/download_data.py
+personal_data: >
+  De-identified public-use microdata: no names or addresses, geography coarsened
+  to PUMAs of 100k+ people, Census disclosure avoidance applied. Race is
+  special-category data (GDPR Art. 9); used only to measure and correct bias.
+  Never attempt re-identification.
+sensitive_attributes: [SEX, RAC1P]
+known_biases: >
+  Survey non-response differs by group. SEX is binary as recorded in 2018.
+  RAC1P codes: 1 White, 2 Black, 3 American Indian, 4 Alaska Native,
+  5 AIAN tribe specified, 6 Asian, 7 Native Hawaiian/Pacific Islander,
+  8 Some other race, 9 Two or more races.
+rows: 195665

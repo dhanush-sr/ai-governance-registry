@@ -1,0 +1,16 @@
+id: taxi-eta
+name: Taxi trip duration estimate
+version: 0.3.0
+owner: mobility-analytics@example.org
+model_type: scikit-learn HistGradientBoostingRegressor
+description: >
+  Estimates yellow-taxi trip duration in minutes from distance, pickup and
+  drop-off zone and pickup time, for an internal fleet-planning dashboard.
+intended_use:
+  primary_use: Aggregate demand and duration forecasts for fleet planning.
+risk:
+  use_case: other
+  interacts_with_people: false
+  generates_synthetic_content: false
+  declared_tier: minimal
+known_issues: Slow at airports, probably fine elsewhere.

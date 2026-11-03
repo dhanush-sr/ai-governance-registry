@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Model card",
+  "description": "Structure of registry/models/<id>/card.yaml. Which fields are required depends on the risk tier (see registry/policy.yaml).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "risk"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "name": {"type": "string"},
+    "version": {"type": "string"},
+    "owner": {"type": "string"},
+    "description": {"type": "string"},
+    "model_type": {"type": "string"},
+    "intended_use": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primary_use": {"type": "string"},
+        "users": {"type": "string"},
+        "out_of_scope": {"type": "string"}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["use_case"],
+      "properties": {
+        "use_case": {"type": "string", "description": "Validated against governance/risk.py USE_CASES"},
+        "interacts_with_people": {"type": "boolean"},
+        "generates_synthetic_content": {"type": "boolean"},
+        "declared_tier": {"enum": ["unacceptable", "high", "limited", "minimal"]}
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"description": {"type": "string"}}
+    },
+    "sensitive_attributes": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "limitations": {"type": "string"},
+    "ethical_considerations": {"type": "string"},
+    "human_oversight": {"type": "string"},
+    "transparency_notice": {"type": "string"},
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {"enum": ["requested", "approved", "rejected"]},
+        "approver": {"type": "string"},
+        "date": {"type": "string", "format": "date"},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

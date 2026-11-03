@@ -1,0 +1,55 @@
+# Deployment policy: what a model must satisfy, per EU AI Act risk tier,
+# before CI lets it deploy. Gates: risk, documentation, lineage, fairness, approval.
+# Field paths are dotted keys into the model card (registry/models/<id>/card.yaml).
+
+framework: EU AI Act, Regulation (EU) 2024/1689
+
+# Every model card, whatever its tier.
+required_fields:
+  - name
+  - owner
+  - version
+  - description
+  - intended_use.primary_use
+  - risk.declared_tier
+  - limitations
+
+tiers:
+  unacceptable:            # Art. 5: prohibited, never deployable
+    deployable: false
+
+  high:                    # Art. 6 + Annex III; obligations in Arts. 9-15
+    deployable: true
+    required_fields:
+      - intended_use.users              # Art. 13 instructions for use
+      - intended_use.out_of_scope       # Art. 13(3)(b)
+      - evaluation.description          # Art. 15 accuracy
+      - sensitive_attributes            # Art. 10(2)(f) examination for bias
+      - ethical_considerations          # Art. 9 risk management
+      - human_oversight                 # Art. 14
+    fairness:                           # computed from eval predictions, per sensitive attribute
+      disparate_impact_min: 0.8         # four-fifths rule on selection rates
+      equal_opportunity_diff_max: 0.1   # largest true-positive-rate gap
+      min_group_size: 100               # smaller groups are reported, not gated
+    approval_required: true             # approver must differ from owner
+
+  limited:                 # Art. 50 transparency obligations
+    deployable: true
+    required_fields:
+      - transparency_notice
+    approval_required: false
+
+  minimal:
+    deployable: true
+    required_fields: []
+    approval_required: false
+
+# Every dataset card a model trains on.
+dataset_required_fields:
+  - name
+  - description
+  - source.url
+  - source.license
+  - source.sha256
+  - collection
+  - personal_data

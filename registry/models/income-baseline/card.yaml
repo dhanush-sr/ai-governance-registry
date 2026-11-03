@@ -1,0 +1,44 @@
+id: income-baseline
+name: Income eligibility pre-screen (unconstrained)
+version: 1.0.0
+owner: credit-ml-team@example.org
+model_type: scikit-learn HistGradientBoostingClassifier
+description: >
+  Predicts whether an applicant's annual personal income exceeds USD 50,000
+  from employment and household survey answers, for the affordability
+  pre-screen of a fictional consumer-credit application flow.
+intended_use:
+  primary_use: >
+    Order incoming credit applications for manual affordability review. A
+    positive prediction sends the application to a fast-track queue; no
+    application is declined by the model.
+  users: Credit underwriting analysts of the lending team.
+  out_of_scope: >
+    Automatic rejection of applicants. Use outside California or for years
+    other than 2018 without re-validation. Employment, insurance, housing or
+    public-benefit decisions.
+risk:
+  use_case: creditworthiness
+  interacts_with_people: false
+  generates_synthetic_content: false
+  declared_tier: high
+evaluation:
+  description: >
+    20% stratified hold-out of the California 2018 ACS income task. The CI
+    gate recomputes fairness from eval_predictions.parquet on every run.
+sensitive_attributes: [SEX, RAC1P]
+limitations: >
+  Trained on one state and one survey year. Income above USD 50,000 is a
+  proxy for affordability, not a measure of it.
+ethical_considerations: >
+  Fairness through unawareness: SEX and RAC1P were removed from the inputs,
+  and the team expected that to make the model fair. Proxies such as
+  occupation, hours worked and place of birth remain.
+human_oversight: >
+  Analysts review every application whatever the score; the model only
+  orders the queue.
+approval:
+  status: approved
+  approver: ai-governance-board@example.org
+  date: 2026-10-29
+  notes: Approved on accuracy review. Automated gates still apply.

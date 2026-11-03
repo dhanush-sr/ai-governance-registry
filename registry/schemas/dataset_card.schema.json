@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset card",
+  "description": "Structure of registry/datasets/<id>.yaml (datasheet-style).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+    "name": {"type": "string"},
+    "description": {"type": "string"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "url": {"type": "string"},
+        "license": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "retrieved": {"type": "string", "format": "date"}
+      }
+    },
+    "collection": {"type": "string"},
+    "preprocessing": {"type": "string"},
+    "personal_data": {"type": "string"},
+    "sensitive_attributes": {"type": "array", "items": {"type": "string"}},
+    "known_biases": {"type": "string"},
+    "rows": {"type": "integer"}
+  }
+}
