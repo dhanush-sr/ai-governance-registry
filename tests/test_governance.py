@@ -27,3 +27,22 @@ def test_metrics_match_fairlearn():
         demographic_parity_ratio(df.y_true, df.y_pred, sensitive_features=df.g))
     tpr = MetricFrame(metrics=true_positive_rate, y_true=df.y_true, y_pred=df.y_pred, sensitive_features=df.g)
     assert m["equal_opportunity_diff"] == pytest.approx(tpr.difference())
+
+
+def test_gate_decisions_and_tamper_detection(tmp_path, monkeypatch):
+    import shutil
+    from governance import gate
+
+    assert gate.main(["income-fair"]) == 0
+    assert gate.main(["income-baseline"]) == 1
+    assert gate.main(["taxi-eta"]) == 1
+
+    # Editing the evidence after training must break lineage.
+    reg = tmp_path / "registry"
+    shutil.copytree("registry", reg)
+    preds = reg / "models/income-fair/eval_predictions.parquet"
+    df = pd.read_parquet(preds)
+    df["y_pred"] = 1
+    df.to_parquet(preds)
+    monkeypatch.setattr(gate, "REGISTRY", reg)
+    assert gate.main(["income-fair"]) == 1

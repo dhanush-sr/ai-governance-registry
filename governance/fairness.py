@@ -15,6 +15,7 @@ def spark(cores="*", app="governance"):
     return (SparkSession.builder.master(f"local[{cores}]").appName(app)
             .config("spark.driver.memory", os.environ.get("SPARK_DRIVER_MEMORY", "4g"))
             .config("spark.ui.enabled", "false")
+            .config("spark.hadoop.fs.defaultFS", "file:///")  # ignore any local HADOOP_CONF_DIR
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .getOrCreate())
 

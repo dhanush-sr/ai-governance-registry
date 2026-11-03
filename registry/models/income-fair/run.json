@@ -1,0 +1,30 @@
+{
+  "model_id": "income-fair",
+  "trained_at": "2026-11-03T10:39:59+00:00",
+  "code": {
+    "commit": "1314d7bcea9f49308979fdbdab2aa0d50e6ff9e9",
+    "dirty": false,
+    "script": "pipeline/train_models.py"
+  },
+  "training_data": [
+    {
+      "id": "acs-income-ca-2018",
+      "sha256": "6194ade52892ddb0e41903f7d3b49399842f08eeebd42e6b19ee8e417affbf79",
+      "rows": 156532,
+      "split": "80% stratified train split, random_state=0"
+    }
+  ],
+  "artifact": {
+    "path": "data/models/income-fair.pkl",
+    "sha256": "45ef5175782410c5e8accaad9b616162cbf414a814bf4b67214005bf9b3adc44"
+  },
+  "evaluation": {
+    "predictions": "eval_predictions.parquet",
+    "sha256": "585e7eb7f81b28495ff9a64ba57948a48b4aa1479d55983ebc442821dfb932df",
+    "rows": 39133,
+    "metrics": {
+      "accuracy": 0.7469,
+      "positive_rate": 0.3881
+    }
+  }
+}

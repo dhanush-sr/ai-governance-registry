@@ -1,0 +1,29 @@
+{
+  "model_id": "taxi-eta",
+  "trained_at": "2026-11-03T10:40:00+00:00",
+  "code": {
+    "commit": "1314d7bcea9f49308979fdbdab2aa0d50e6ff9e9",
+    "dirty": false,
+    "script": "pipeline/train_models.py"
+  },
+  "training_data": [
+    {
+      "id": "nyc-tlc-yellow-2023-01",
+      "sha256": "32df6f67578fa86c484a6b5ef23a5281992ff085521082340b0f9e5889e9a572",
+      "rows": 500000,
+      "split": "600k-trip random sample, 5/6 train, random_state=0"
+    }
+  ],
+  "artifact": {
+    "path": "data/models/taxi-eta.pkl",
+    "sha256": "7390c1cbdbb3b30f5313c87620b33155f28c3c92c004a69a350a2f0bd73ef8de"
+  },
+  "evaluation": {
+    "predictions": "eval_predictions.parquet",
+    "sha256": "371dc3861125b85194bbf071290495ada9d7cad2934b6a155be876c58203ac0c",
+    "rows": 100000,
+    "metrics": {
+      "mae_minutes": 2.818
+    }
+  }
+}

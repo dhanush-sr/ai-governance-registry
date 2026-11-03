@@ -24,7 +24,8 @@ ICON = {"pass": "✅ pass", "fail": "❌ fail", "n/a": "➖ n/a"}
 
 
 def load(path):
-    return yaml.safe_load(Path(path).read_text())  # YAML is a JSON superset
+    # YAML is a JSON superset; the JSON round-trip turns YAML dates back into ISO strings
+    return json.loads(json.dumps(yaml.safe_load(Path(path).read_text()), default=str))
 
 
 def sha256(path):

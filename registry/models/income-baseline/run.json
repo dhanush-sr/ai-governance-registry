@@ -1,0 +1,30 @@
+{
+  "model_id": "income-baseline",
+  "trained_at": "2026-11-03T10:37:10+00:00",
+  "code": {
+    "commit": "1314d7bcea9f49308979fdbdab2aa0d50e6ff9e9",
+    "dirty": false,
+    "script": "pipeline/train_models.py"
+  },
+  "training_data": [
+    {
+      "id": "acs-income-ca-2018",
+      "sha256": "6194ade52892ddb0e41903f7d3b49399842f08eeebd42e6b19ee8e417affbf79",
+      "rows": 156532,
+      "split": "80% stratified train split, random_state=0"
+    }
+  ],
+  "artifact": {
+    "path": "data/models/income-baseline.pkl",
+    "sha256": "7aa419ee764cf92ad81e55fd9763be32e007e301d192b33debe69cb2c07ffc0d"
+  },
+  "evaluation": {
+    "predictions": "eval_predictions.parquet",
+    "sha256": "a3de8a2f13f33c277dd8b34eb608893cacc4056a18f00271083dd5b109e59e94",
+    "rows": 39133,
+    "metrics": {
+      "accuracy": 0.8254,
+      "positive_rate": 0.4109
+    }
+  }
+}

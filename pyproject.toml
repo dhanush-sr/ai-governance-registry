@@ -5,7 +5,7 @@ description = "Model/dataset card registry with EU AI Act risk tiers and CI depl
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pyspark>=4.0",
-    "pandas>=2.2",
+    "pandas>=2.2,<3",
     "pyarrow>=17",
     "scikit-learn>=1.5",
     "fairlearn>=0.12",
