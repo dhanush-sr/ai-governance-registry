@@ -2,7 +2,7 @@
   "model_id": "taxi-eta",
   "trained_at": "2026-11-03T10:40:00+00:00",
   "code": {
-    "commit": "1314d7bcea9f49308979fdbdab2aa0d50e6ff9e9",
+    "commit": "ecd11bdcbea123d448483652f68be248bcdc63ad",
     "dirty": false,
     "script": "pipeline/train_models.py"
   },
