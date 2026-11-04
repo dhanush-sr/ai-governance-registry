@@ -48,7 +48,7 @@ human_oversight: >
   orders the queue. Analysts can override the queue, and overrides are
   logged and reviewed monthly for disparate patterns.
 approval:
-  status: approved
+  status: requested
   approver: ai-governance-board@example.org
   date: 2026-10-29
   notes: Staged roll-out, with a quarterly fairness re-audit.
