@@ -24,7 +24,7 @@ risk:
   use_case: creditworthiness
   interacts_with_people: false
   generates_synthetic_content: false
-  declared_tier: high
+  declared_tier: minimal
 evaluation:
   description: >
     20% stratified hold-out of the California 2018 ACS income task. The CI
