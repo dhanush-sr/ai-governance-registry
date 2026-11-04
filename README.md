@@ -12,7 +12,7 @@ The fairness gate is a **Spark job**, and the same code is benchmarked at up to 
 | Reproducible pipeline | [`Makefile`](Makefile), [`pipeline/`](pipeline/) |
 | Results notebook | [`notebooks/results.ipynb`](notebooks/results.ipynb) |
 | Technical report | [`report/report.pdf`](report/report.pdf) (source: [`report/report.md`](report/report.md)) |
-| 3-minute demo video | [`demo/demo.mp4`](demo/demo.mp4) (narration: [`demo/script.md`](demo/script.md)) |
+| Demo video | [`demo/demo.mp4`](demo/demo.mp4): the live demo app checking all three cases, and GitHub blocking each change |
 | Model card / data card | [`registry/models/income-fair/card.yaml`](registry/models/income-fair/card.yaml), [`registry/datasets/acs-income-ca-2018.yaml`](registry/datasets/acs-income-ca-2018.yaml) |
 
 ## Architecture

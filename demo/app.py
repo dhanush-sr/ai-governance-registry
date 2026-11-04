@@ -597,7 +597,7 @@ async function check() {
     ${model == "income-baseline" && !applied ? `<details id="whyfair"><summary>See why it's unfair</summary><div id="fairout"></div></details>` : ""}`;
   $("#whyfair") && $("#whyfair").addEventListener("toggle", showFair, {once: true});
   $("#diff").innerHTML = r.changes.length ? `<div class="diff"><div class="dh">What changed</div>${r.changes.map(([what, a, b]) => `<div class="dr"><span>${what}</span><s>${esc(a)}</s>${icon("arrow")}<b>${esc(b)}</b></div>`).join("")}</div>` : "";
-  $("#push").innerHTML = applied ? `<div class="pushbox"><button class="act primary" onclick="push()">Push this change to GitHub</button><p class="hint">Changes reach the real system through GitHub, as a pull request.</p><div id="pr"></div></div>` : "";
+  $("#push").innerHTML = `<div class="pushbox"><button class="act primary" onclick="push()">${applied ? "Push this change to GitHub" : "See this AI on GitHub"}</button><p class="hint">${applied ? "Changes reach the real system through GitHub, as a pull request." : "GitHub runs the same checker and only releases AIs that pass."}</p><div id="pr"></div></div>`;
   last = r;
 }
 
@@ -615,10 +615,14 @@ window.push = async () => {
       <div class="verdict ${blocked ? "bad" : running ? "" : "ok"}">${running ? "Still checking…" : blocked ? icon("no") + " Merging is blocked" : icon("ok") + " Allowed"}</div>
       <p class="because">${blocked ? "The change can't get into the real system. Nobody can override this, not even the owner." : ""}</p>
       <div class="row-actions" style="margin-top:18px"><a class="act" href="${pr.url}" target="_blank">See it on GitHub</a></div>`; return; }
-  const mine = g.main.find(c => c.name == "gate (" + model + ")");
-  out.innerHTML = applied == "fix_paperwork"
-    ? `<p class="because" style="margin-top:20px">Pushed, this fix would turn the taxi AI's check on GitHub <b style="color:var(--ok)">green</b>, so it could be released. Right now it is ${mine && mine.conclusion == "success" ? "green" : "<b style='color:var(--bad)'>red</b>"}.</p>`
-    : `<p class="because" style="margin-top:20px">This AI's check on GitHub is already <b style="color:var(--bad)">red</b>, and stays red after this change. It is never released.</p>`;
+  const mine = g.main.find(c => c.name == "gate (" + model + ")"), ok = mine && mine.conclusion == "success";
+  const note = applied == "fix_paperwork" ? " With this fix pushed, its check would turn green and it could be released."
+    : applied ? " This change doesn't help: the checker still says no." : "";
+  out.innerHTML = `<p class="because" style="margin-top:20px">On GitHub, this AI's own check on the current version:</p>
+    <div class="checks">${mine ? row(mine) : ""}</div>
+    <div class="verdict ${ok ? "ok" : "bad"}">${icon(ok ? "ok" : "no")} ${ok ? "Released" : "Not released"}</div>
+    <p class="because">${ok ? "Its check passed, so GitHub's release step ran." : "Its check failed, so GitHub skips the release step. It never goes live."}${note}</p>
+    ${mine ? `<div class="row-actions" style="margin-top:18px"><a class="act" href="${mine.url}" target="_blank">See it on GitHub</a></div>` : ""}`;
 };
 
 async function showFair(e) {
