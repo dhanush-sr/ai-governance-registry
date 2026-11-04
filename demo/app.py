@@ -14,6 +14,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import json
 import pickle
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -132,9 +133,36 @@ def classify_use(body):
             "fairness": bool(r.get("fairness")), "approval": bool(r.get("approval_required"))}
 
 
+_gh = {"t": 0, "data": None}
+
+
+def _gh_headers():
+    """Use the local `gh` login when there is one: 5,000 requests/hour instead of 60 for anonymous use."""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token and shutil.which("gh"):
+        token = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+GH_HEADERS = _gh_headers()
+
+
 def github():
+    """Live check results from GitHub, remembered for a minute so the demo doesn't wait on the network."""
+    if _gh["data"] and time.time() - _gh["t"] < 60:
+        return _gh["data"]
+    data = _github()
+    if "error" not in data:
+        _gh.update(t=time.time(), data=data)
+    return data
+
+
+def _github():
     def get(path):
-        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}", headers={"Accept": "application/vnd.github+json"})
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}", headers=GH_HEADERS)
         with urllib.request.urlopen(req, timeout=8) as f:
             return json.load(f)
 
