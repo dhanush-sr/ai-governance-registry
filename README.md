@@ -103,6 +103,8 @@ make report      # report/report.md -> report/report.pdf (needs Google Chrome)
 
 To gate a single model: `uv run python -m governance.gate income-fair`.
 
+**Live demo app:** `uv run python -m demo.app` opens a local web page where you can try the loan AI on an applicant, run the fairness audit, submit models to the checkpoint (and break them to see them get blocked), and run the 1.6 M-row Spark audit. It needs `make data train benchmark` to have been run first.
+
 **To register a new model:**
 1. Add `registry/models/<id>/card.yaml`.
 2. Add a dataset card for each new dataset in `registry/datasets/`.
