@@ -31,12 +31,6 @@ evaluation:
     gate recomputes fairness from eval_predictions.parquet on every run;
     accuracy is recorded in run.json by the training pipeline.
 sensitive_attributes: [SEX, RAC1P]
-limitations: >
-  Trained on one state and one survey year, so parity on the training
-  population does not guarantee parity elsewhere (see the at-scale audit in
-  notebooks/results.ipynb). Predictions are randomized across the ensemble,
-  so the same applicant can receive different outputs. Income above USD
-  50,000 is a proxy for affordability, not a measure of it.
 ethical_considerations: >
   SEX and RAC1P are not model inputs. They are used only during training to
   enforce demographic parity, which EU AI Act Art. 10(5) allows for bias
