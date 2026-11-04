@@ -92,7 +92,8 @@ def plain_basis(tier, basis):
 def summarise(r, secs=0.0):
     return {"id": r["id"], "name": ABOUT.get(r["id"], r["id"]), "tier": r["tier"], "basis": plain_basis(r["tier"], r["basis"]),
             "ok": r["deployable"], "status": r["status"], "seconds": secs,
-            "why": [PLAIN[g] for g in gate.GATES if r["status"][g] == "fail"],
+            "why": [("Its fairness can't be measured from changed evidence." if g == "fairness" and any("no trustworthy" in m for m in r["fails"][g])
+                     else PLAIN[g]) for g in gate.GATES if r["status"][g] == "fail"],
             "detail": [m.replace("`", "") for g in gate.GATES for m in r["fails"][g]],
             "fairness": {a: {"di": v["disparate_impact"], "gap": v["equal_opportunity_diff"]} for a, v in r["fairness"].items()}}
 
@@ -268,204 +269,314 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
 
 
-PAGE = r"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>AI Governance Registry: live demo</title><style>
-:root{--ink:#0b0b0b;--muted:#52514e;--line:#e2e1dc;--bg:#f6f5f2;--base:#eb6834;--fair:#2a78d6;--ok:#0a7d0a;--bad:#c62f2f}
-*{box-sizing:border-box;margin:0}body{font:17px/1.5 -apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--bg)}
-header{background:white;border-bottom:1px solid var(--line);padding:14px 36px;display:flex;align-items:center;gap:28px;position:sticky;top:0;z-index:2}
-header h1{font-size:19px;white-space:nowrap}nav{display:flex;gap:4px;flex-wrap:wrap}nav button{border:0;background:none;font:inherit;font-size:15px;padding:9px 13px;border-radius:10px;cursor:pointer;color:var(--muted)}
-nav button.on{background:var(--ink);color:white}main{padding:28px 36px;max-width:1440px}.tab{display:none}.tab.on{display:block}
-h2{font-size:30px;margin-bottom:6px}h3{font-size:19px;margin:22px 0 10px}.sub{color:var(--muted);margin-bottom:22px;max-width:80ch}
-.panel{background:white;border:1px solid var(--line);border-radius:16px;padding:22px}.grid{display:grid;grid-template-columns:420px 1fr;gap:24px;align-items:start}
-label{display:block;font-size:14px;color:var(--muted);margin:12px 0 4px}select,input{width:100%;font:inherit;padding:9px 12px;border:1px solid #cfcec8;border-radius:10px;background:white}
-.btn{border:0;font:inherit;font-weight:600;padding:11px 18px;border-radius:12px;cursor:pointer;background:var(--ink);color:white;margin:14px 8px 0 0;text-decoration:none;display:inline-block}
-.btn.light{background:#ecebe6;color:var(--ink)}.btn:disabled{opacity:.5;cursor:wait}.yes{color:var(--ok)}.no{color:var(--bad)}.note{color:var(--muted);font-size:14px;margin-top:12px}
-table{border-collapse:collapse;width:100%;background:white;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top;font-size:15px}th{background:#faf9f7;color:var(--muted);font-weight:600}
-tr.click{cursor:pointer}tr.click:hover{background:#f7f6f3}.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:700;font-size:13px;white-space:nowrap}
-.pill.ok{background:#e3f4e3;color:var(--ok)}.pill.bad{background:#fbe4e4;color:var(--bad)}.pill.tier{background:#e8f0fb;color:#1c5cab}.pill.ban{background:#2b2a28;color:white}
-pre{background:#161615;color:#f0efec;border-radius:12px;padding:18px;font-size:13px;white-space:pre-wrap;max-height:520px;overflow:auto}
-.brief{font-size:24px;line-height:1.4;background:white;border-left:6px solid var(--fair);padding:20px 26px;border-radius:0 14px 14px 0;margin-bottom:24px;max-width:1100px}
-.check-row{display:grid;grid-template-columns:44px 1fr 1.3fr 150px;gap:16px;align-items:center;background:white;border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:8px 0}
-.tick{width:36px;height:36px;border-radius:50%;background:#e3f4e3;color:var(--ok);display:grid;place-items:center;font-weight:800;font-size:19px}
-.check-row b{font-size:17px}.check-row span{color:var(--muted);font-size:15px}.check-row .btn{margin:0;padding:8px 14px;font-size:14px;text-align:center}
-.flow{display:flex;gap:10px;align-items:center;margin:4px 0 22px;flex-wrap:wrap}.fbox{background:white;border:2px solid var(--line);border-radius:12px;padding:10px 14px;font-size:15px}.arrow{color:var(--muted);font-size:22px}
-.chain{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:17px}.chain .step{background:white;border:1px solid var(--line);border-radius:12px;padding:10px 14px}.chain small{display:block;color:var(--muted);font-size:12px}
-.tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.tierbox{background:white;border:1px solid var(--line);border-radius:14px;padding:16px;font-size:14px}.tierbox b{font-size:17px;display:block;margin-bottom:6px}.tierbox ul{padding-left:18px}
-.lights div{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:800;flex:none}
-.pass .dot{background:#e3f4e3;color:var(--ok)}.fail .dot{background:#fbe4e4;color:var(--bad)}.fail{font-weight:600}.na .dot{background:#efeeea;color:#8a8984}.na{color:#8a8984}
-.decision{font-size:38px;font-weight:800;margin:4px 0 10px}.why{color:var(--bad);padding-left:20px;margin-top:10px}code{font-size:12px;color:var(--muted);display:block;margin-top:10px;white-space:pre-wrap}
-.models{display:flex;gap:10px;flex-wrap:wrap}.chip{border:2px solid var(--line);background:white;border-radius:12px;padding:10px 14px;cursor:pointer;font:inherit;text-align:left}.chip.on{border-color:var(--ink)}.chip small{display:block;color:var(--muted);font-size:13px}
-.breaks label{display:flex;gap:10px;align-items:center;color:var(--ink);font-size:16px;margin:8px 0}.breaks input{width:auto}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0}.stat{background:white;border:1px solid var(--line);border-radius:14px;padding:16px}.stat b{display:block;font-size:30px}.stat small{color:var(--muted)}
-.grp{display:grid;grid-template-columns:190px 1fr;gap:14px;align-items:center;margin:5px 0}.gname{text-align:right;font-size:15px}
-.b{height:18px;border-radius:0 4px 4px 0;position:relative}.b span{position:absolute;left:calc(100% + 6px);top:-2px;font-size:13px;white-space:nowrap}
-.answers{display:grid;grid-template-columns:1fr 1fr;gap:16px}.ans{border-radius:16px;padding:20px;background:white;border:2px solid var(--line)}.ans h3{font-size:15px;color:var(--muted);margin:0}
-.verdict{font-size:30px;font-weight:800;margin:6px 0}.meter{height:12px;border-radius:6px;background:#ecebe6;overflow:hidden;margin-top:8px}.meter i{display:block;height:100%}
-.truth{margin-top:16px;padding:14px 18px;border-radius:14px;background:#fffbe9;border:1px solid #f2e3a3}
-.gh{display:grid;grid-template-columns:1fr 1fr;gap:20px}.ghcheck{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
-.banner{border-radius:14px;padding:16px 20px;font-size:19px;font-weight:700;margin:12px 0}.banner.bad{background:#fbe4e4;color:var(--bad)}.banner.ok{background:#e3f4e3;color:var(--ok)}
-.spin{display:inline-block;width:18px;height:18px;border:3px solid #ccc;border-top-color:var(--ink);border-radius:50%;animation:s .8s linear infinite;vertical-align:-3px;margin-right:8px}@keyframes s{to{transform:rotate(360deg)}}
-.legend span{margin-right:20px;font-size:14px}.sw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:6px}
+PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Governance Registry</title><style>
+:root{--ink:#1d1d1f;--ink2:#6e6e73;--ink3:#86868b;--line:#e5e5ea;--fill:#f5f5f7;--blue:#0071e3;--blue-h:#0077ed;--ok:#1f7a35;--bad:#c4131f;--okbg:#eaf6ec;--badbg:#fdeceb;--first:#eb6834;--fair:#2a78d6;
+--ease:cubic-bezier(.16,1,.3,1);font-synthesis:none}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+::selection{background:#cfe4fb}
+:focus-visible{outline:3px solid rgba(0,113,227,.45);outline-offset:3px;border-radius:8px}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
+svg.i{width:1em;height:1em;flex:none;vertical-align:-.13em}
+
+/* frame */
+.top{position:fixed;inset:0 0 auto;height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(16px);z-index:5}
+.brand{font-weight:600;font-size:15px}
+.dots{display:flex;gap:6px;align-items:center}
+.dot{width:8px;height:8px;border-radius:50%;background:#d2d2d7;transition:background .3s}
+.dot.done{background:#8e8e93}.dot.on{width:22px;border-radius:4px;background:var(--ink)}
+.dots button{padding:6px 2px;display:grid;place-items:center}
+.count{font-size:13px;color:var(--ink2);min-width:74px;text-align:right}
+main{min-height:100%;display:flex;justify-content:center;padding:120px 28px 140px}
+.step{width:100%;max-width:880px;display:none}
+.step.on{display:block;animation:rise .55s var(--ease) both}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.step.on{animation:none}.dot{transition:none}}
+.foot{position:fixed;inset:auto 0 0;height:84px;display:flex;align-items:center;justify-content:center;gap:18px;background:linear-gradient(to top,#fff 70%,rgba(255,255,255,0));z-index:5}
+.next{background:var(--blue);color:#fff;font-weight:500;font-size:17px;padding:12px 30px;border-radius:980px;min-width:148px;transition:background .2s}
+.next:hover{background:var(--blue-h)}
+.back{color:var(--blue);font-size:17px;padding:12px 18px}
+.back[disabled]{visibility:hidden}
+
+/* type */
+h1{font:600 clamp(34px,4.4vw,52px)/1.08 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;letter-spacing:-.022em;text-align:center;text-wrap:balance;margin:0 auto 18px;max-width:18ch}
+.lede{font-size:21px;line-height:1.38;color:var(--ink2);text-align:center;max-width:36em;margin:0 auto;text-wrap:pretty}
+.lede b{color:var(--ink);font-weight:600}
+.quote{font-size:15px;color:var(--ink3);text-align:center;margin:16px auto 0;max-width:42em}
+.stage{margin:48px auto 0;max-width:720px}
+.center{text-align:center}
+
+/* actions */
+.act{display:inline-flex;align-items:center;gap:8px;background:var(--fill);color:var(--ink);font-weight:500;padding:11px 20px;border-radius:980px;transition:background .2s}
+.act:hover{background:#e8e8ed}.act[disabled]{opacity:.5;cursor:progress}
+.act.primary{background:var(--ink);color:#fff}.act.primary:hover{background:#333336}
+.link{color:var(--blue);font-size:15px;padding:4px 0}
+.row-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+/* lists */
+.list{border-top:1px solid var(--line)}
+.li{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:16px 4px;border-bottom:1px solid var(--line)}
+.li .t{font-weight:600}.li .s{font-size:14px;color:var(--ink2);margin-top:2px}
+.li.btnrow{cursor:pointer;width:100%;text-align:left}.li.btnrow:hover{background:#fafafa}
+.group-h{font-size:13px;font-weight:600;color:var(--ink2);margin:30px 4px 8px}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;padding:5px 12px;border-radius:980px;white-space:nowrap}
+.badge.ok{background:var(--okbg);color:var(--ok)}.badge.bad{background:var(--badbg);color:var(--bad)}.badge.tier{background:var(--fill);color:var(--ink)}
+.chev{color:var(--ink3);margin-left:10px}
+
+/* flow on welcome */
+.flow{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin-top:44px;font-size:17px}
+.flow span{padding:10px 18px;border-radius:980px;background:var(--fill)}
+.flow .arr{background:none;padding:0;color:var(--ink3)}
+.flow .end{background:none;padding:0;font-weight:600;white-space:nowrap}
+.flow .end span{background:none;padding:0}
+
+/* verdict */
+.verdict{display:flex;align-items:center;justify-content:center;gap:12px;font:600 34px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.015em;margin:28px 0 6px}
+.verdict.ok{color:var(--ok)}.verdict.bad{color:var(--bad)}
+.because{text-align:center;color:var(--ink2);font-size:17px;max-width:34em;margin:0 auto}
+.checks{margin:28px auto 0;max-width:520px}
+.ck{display:flex;align-items:center;gap:14px;padding:12px 4px;border-bottom:1px solid var(--line);font-size:17px}
+.ck:first-child{border-top:1px solid var(--line)}
+.ck .ic{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none}
+.ck.pass .ic{background:var(--okbg);color:var(--ok)}.ck.fail .ic{background:var(--badbg);color:var(--bad)}.ck.na .ic{background:var(--fill);color:var(--ink3)}
+.ck.fail{font-weight:600}.ck.na{color:var(--ink3)}
+.ck small{margin-left:auto;font-size:13px;color:var(--ink3);font-weight:400}
+
+/* segmented */
+.seg{display:inline-flex;background:var(--fill);border-radius:12px;padding:3px;gap:2px}
+.seg button{padding:8px 16px;border-radius:9px;font-size:15px;color:var(--ink2)}
+.seg button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* bars */
+.bars{margin:30px auto 0;max-width:640px}
+.br{display:grid;grid-template-columns:150px 1fr;gap:16px;align-items:center;margin:9px 0}
+.br .n{font-size:14px;text-align:right;color:var(--ink2)}
+.br .pair{display:grid;gap:3px}
+.bar{height:12px;border-radius:0 6px 6px 0;position:relative;transform-origin:left;animation:grow .8s var(--ease) both}
+.bar i{position:absolute;left:calc(100% + 8px);top:-3px;font:normal 12px/1 -apple-system,sans-serif;color:var(--ink2);white-space:nowrap}
+@keyframes grow{from{transform:scaleX(0)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.bar{animation:none}}
+.legend{display:flex;gap:22px;justify-content:center;font-size:14px;color:var(--ink2);margin-top:18px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px}
+.facts{display:flex;justify-content:center;gap:56px;margin-top:34px;flex-wrap:wrap}
+.fact{text-align:center}.fact b{display:block;font:600 40px/1 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.02em}
+.fact span{font-size:14px;color:var(--ink2)}
+
+/* details */
+details{margin:26px auto 0;max-width:640px}
+summary{cursor:pointer;color:var(--blue);font-size:15px;list-style:none;text-align:center}
+summary::-webkit-details-marker{display:none}
+details[open] summary{margin-bottom:14px}
+.detail-body{font-size:15px;color:var(--ink2)}
+pre{background:var(--fill);color:var(--ink);border-radius:14px;padding:18px 20px;font:13px/1.55 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;max-height:360px;overflow:auto;margin-top:8px;text-align:left}
+.tierrow{display:grid;grid-template-columns:120px 1fr;gap:16px;padding:12px 0;border-bottom:1px solid var(--line);font-size:15px;color:var(--ink)}
+.tierrow b{font-weight:600}
+select{font:inherit;font-size:17px;padding:10px 38px 10px 16px;border-radius:12px;border:1px solid #d2d2d7;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2386868b' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 14px center;-webkit-appearance:none;appearance:none;color:var(--ink)}
+.try{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:18px}
+.result{text-align:center;margin-top:18px;min-height:52px;font-size:17px}
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid #d2d2d7;border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:10px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.wait{text-align:center;color:var(--ink2);margin-top:30px}
+.recap .li{grid-template-columns:28px 1fr auto}
+.recap .ok{color:var(--ok)}
+.form{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;max-width:640px;margin:36px auto 0}
+.form label{font-size:13px;color:var(--ink2);display:grid;gap:6px}
+.form select,.form input{width:100%}
+.form input{font:inherit;font-size:17px;padding:10px 16px;border-radius:12px;border:1px solid #d2d2d7}
+.answers{display:flex;justify-content:center;gap:48px;margin-top:30px;flex-wrap:wrap}
+.answer{text-align:center}.answer span{font-size:14px;color:var(--ink2)}.answer b{display:block;font:600 28px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;margin-top:4px}
+.truth{text-align:center;margin-top:22px;font-size:15px;color:var(--ink2)}
+@media (max-width:640px){.flow .arr{display:none}.flow{gap:8px}main{padding:96px 20px 130px}.br{grid-template-columns:96px 1fr}.form{grid-template-columns:1fr}.top{padding:0 16px}.dots{display:none}}
 </style></head><body>
-<header><h1>AI Governance Registry</h1><nav>
-<button class="on" data-t="brief">0 · The task</button><button data-t="registry">1 · Registry</button><button data-t="risk">2 · Risk level</button>
-<button data-t="gate">3 · Release check</button><button data-t="github">4 · On GitHub</button><button data-t="evidence">5 · Proof in numbers</button><button data-t="try">6 · Try the AI</button></nav></header>
-<main>
-
-<section class="tab on" id="brief"><h2>Our task, and where we prove each part</h2>
-<div class="brief"><small style="display:block;color:var(--muted);font-size:14px;font-weight:600">CASE STUDY</small>"A company needs every model to be <b>documented</b>, <b>risk-rated</b> and <b>approved</b> before release."</div>
-<div class="flow"><div class="fbox">A team builds an AI and writes its card</div><div class="arrow">→</div><div class="fbox">Uploads it to GitHub</div><div class="arrow">→</div>
-<div class="fbox">Our checker runs by itself</div><div class="arrow">→</div><div class="fbox">5 checks, using the rule book</div><div class="arrow">→</div><div class="fbox"><b class="yes">✓ Released</b> or <b class="no">✗ Blocked</b></div></div>
-<div id="checklist"><p class="note"><span class="spin"></span>Loading live status…</p></div></section>
-
-<section class="tab" id="registry"><h2>1 · The registry</h2><p class="sub">Every AI and every dataset has a <b>card</b>: a short document about it, kept as a file on GitHub. The status is checked live. Click a row to read its card.</p>
-<h3>AI cards</h3><div id="modelTable"></div><h3>Data cards</h3><div id="dataTable"></div>
-<h3>The rule book: what each risk level needs</h3><div id="rules"></div>
-<p style="margin-top:6px"><b>The checker's settings:</b> <button class="btn light" onclick="show('registry/policy.yaml')">Open the rule book (policy.yaml)</button><button class="btn light" onclick="show('.github/workflows/governance-gate.yml')">Open the GitHub setup (workflow)</button></p><div id="cardView" style="margin-top:20px"></div></section>
-
-<section class="tab" id="risk"><h2>2 · Risk level (EU AI Act)</h2><p class="sub">The team only says what the AI is <b>used for</b>. Our checker uses the EU AI Act to decide how risky it is. So no one can call a loan AI "harmless" to skip the rules.</p>
-<div id="riskChains"></div><h3>Try it with any use</h3><div class="grid"><div class="panel"><label>What is the AI used for?</label><select id="useCase"></select>
-<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="people" style="width:auto">It chats with people</label>
-<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="content" style="width:auto">It creates images, text or audio</label>
-<button class="btn" id="classifyBtn">Check the risk level</button></div><div class="panel" id="classifyOut"><p class="note">Pick a use and press the button.</p></div></div></section>
-
-<section class="tab" id="gate"><h2>3 · Release check: three example AIs</h2><p class="sub">This runs our real checker. Tick a box to break something first, and see if it gets caught. (Your files are not changed.)</p>
-<div class="grid"><div class="panel"><b>Choose an AI</b><div class="models" id="models" style="margin-top:12px"></div>
-<div class="breaks" style="margin-top:20px"><b>Break something? (you can skip this)</b>
-<label><input type="checkbox" value="edit_results">Secretly edit its test results to look perfect</label>
-<label><input type="checkbox" value="withdraw_approval">The manager withdraws approval</label>
-<label><input type="checkbox" value="delete_limitations">Delete the "limitations" section</label>
-<label><input type="checkbox" value="claim_minimal">Claim it's "minimal risk" to dodge the rules</label></div>
-<button class="btn" id="gateBtn">Submit for release</button></div><div class="panel" id="gateOut"><p class="note">Choose an AI and press "Submit for release".</p></div></div></section>
-
-<section class="tab" id="github"><h2>4 · The same checks, by themselves, on GitHub</h2>
-<p class="sub">GitHub runs our checker every time someone changes something, with one check per AI. This is the <b>live</b> result from GitHub: the current version, and a proposed change where someone removed a section from the fair AI's card.</p><div id="ghOut"><p class="note"><span class="spin"></span>Asking GitHub…</p></div></section>
-
-<section class="tab" id="evidence"><h2>5 · Proof in numbers</h2><p class="sub">The course asks for real measurements, not just claims. Both buttons run live.</p>
-<h3>Responsible AI: is the loan AI fair? Test both versions on 39,133 real people</h3><button class="btn" id="auditBtn">Run the fairness test</button><div id="auditOut"></div>
-<h3 style="margin-top:34px">Big data: run the same fairness check on 1.6 million applications</h3>
-<p class="note" style="margin-top:0">We use Apache Spark, which shares the work across the computer's cores. The 1.6 million are the census people copied with new IDs.</p>
-<button class="btn" id="scaleBtn">Check 1.6 million applications now</button><div id="scaleOut"></div>
-<div class="panel" style="margin-top:20px;max-width:860px"><b>Measured earlier on 25 million applications</b>
-<div class="grp"><div class="gname">Normal Python, 1 core</div><div class="b" style="width:85%;background:var(--base)"><span>85 s</span></div></div>
-<div class="grp"><div class="gname">Spark, 8 cores</div><div class="b" style="width:20%;background:var(--fair)"><span>20 s: 4.3× faster, same answer</span></div></div></div></section>
-
-<section class="tab" id="try"><h2>6 · Try the loan AI yourself</h2><p class="sub">This is the example AI our checker tests. It guesses if a person earns over $50,000. It is never told their race or sex.</p>
-<div class="grid"><div class="panel" id="form"></div><div><div class="answers" id="answers"></div><div id="truth"></div></div></div></section>
-</main>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-ok" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-no" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-na" viewBox="0 0 16 16"><path d="M4.5 8h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10m-4-4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-chev" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+<header class="top"><div class="brand">AI Governance Registry</div><nav class="dots" id="dots" aria-label="Steps"></nav><div class="count" id="count"></div></header>
+<main id="main"></main>
+<footer class="foot"><button class="back" id="back">Back</button><button class="next" id="next">Continue</button></footer>
 <script>
 const C = __CHOICES__, USES = __USES__;
-const $ = s => document.querySelector(s), J = async (u, b) => (await fetch(u, b ? {method: "POST", body: JSON.stringify(b)} : {})).json();
-const go = t => { document.querySelectorAll("nav button,.tab").forEach(e => e.classList.remove("on"));
-  document.querySelector(`nav button[data-t=${t}]`).classList.add("on"); $("#" + t).classList.add("on"); window.scrollTo(0, 0); if (t == "github") loadGH(); };
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.t));
-const busy = (el, msg) => el.innerHTML = `<p class="note" style="margin-top:16px"><span class="spin"></span>${msg}</p>`;
+const $ = s => document.querySelector(s);
+const J = async (u, b) => (await fetch(u, b ? {method: "POST", body: JSON.stringify(b)} : {})).json();
+const icon = (n, cls = "i") => `<svg class="${cls}"><use href="#i-${n}"/></svg>`;
 const pct = x => (x * 100).toFixed(0) + "%";
-const tierPill = t => `<span class="pill ${t == "unacceptable" ? "ban" : "tier"}">${t == "unacceptable" ? "BANNED" : t.toUpperCase() + " RISK"}</span>`;
-const verdictPill = ok => `<span class="pill ${ok ? "ok" : "bad"}">${ok ? "✓ Released" : "✗ Blocked"}</span>`;
+const esc = s => String(s).replace(/[<&>]/g, c => ({"<": "&lt;", "&": "&amp;", ">": "&gt;"}[c]));
+const wait = msg => `<p class="wait"><span class="spinner"></span>${msg}</p>`;
+const QUESTIONS = {risk: "Is its risk level right?", documentation: "Is its paperwork complete?", lineage: "Can we trace where it came from?", fairness: "Is it fair to every group?", approval: "Did someone independent approve it?"};
+const TIER = {unacceptable: "Banned", high: "High risk", limited: "Limited risk", minimal: "Minimal risk"};
+let O = null;  // overview: registry + live gate results
 
-// ---- 0 brief + 1 registry + 2 risk chains (one live gate run on every model)
-J("/api/overview").then(o => {
-  const rel = o.models.filter(m => m.ok).length, fair = o.models.find(m => m.id == "income-fair"), base = o.models.find(m => m.id == "income-baseline");
-  const taxi = o.models.find(m => m.id == "taxi-eta");
-  const rows = [
-    ["What to do", "\u201cBuild a registry of model and dataset cards\u201d", `${o.models.length} AI cards and ${o.datasets.length} data cards, kept on GitHub`, "go('registry')"],
-    ["", "\u201c…with a risk classification based on the NIST AI RMF or the EU AI Act\u201d", `Risk level worked out from what each AI is used for: ${o.models.map(m => m.tier).join(", ")}`, "go('risk')"],
-    ["", "\u201cAdd CI checks that block deployment…\u201d", "GitHub runs our checker on every change. If it fails, the change can't go in", "go('github')"],
-    ["", "\u201c…when fairness…\u201d requirements are not met", `The first loan AI is blocked: fairness score ${base.fairness.RAC1P.di.toFixed(2)} (needs 0.80)`, "runGate('income-baseline', [])"],
-    ["", "\u201c…documentation…\u201d requirements are not met", "The taxi AI is blocked: its card has no \u201climitations\u201d section", "runGate('taxi-eta', [])"],
-    ["", "\u201c…or lineage requirements are not met\u201d", "If test results are changed after training, the AI is blocked", "runGate('income-fair', ['edit_results'])"],
-    ["Submit", "\u201cRegistry\u201d", "The registry folder: all the cards and the rule book", "go('registry')"],
-    ["", "\u201cCI gate configuration\u201d", "The rule book (policy.yaml) and the GitHub setup file", "show('.github/workflows/governance-gate.yml')"],
-    ["", "\u201cThree example models that pass or fail\u201d", `${rel} released and ${o.models.length - rel} blocked, each for a different reason`, "go('gate')"],
-    ["Also required by the course", "Responsible AI, proven with numbers", `Fairness measured on 39,133 people: ${base.fairness.RAC1P.di.toFixed(2)} vs ${fair.fairness.RAC1P.di.toFixed(2)}`, "go('evidence')"],
-    ["", "Big data, proven with numbers", "Spark checks 1.6 million applications live, and was 4.3× faster on 25 million", "go('evidence')"],
-    ["", "Only public data", "US Census survey · New York taxi trips", "go('registry')"]];
-  $("#checklist").innerHTML = rows.map(([sec, a, b, act]) => (sec ? `<h3>${sec}</h3>` : "") +
-    `<div class="check-row"><div class="tick">✓</div><b>${a}</b><span>${b}</span><button class="btn" onclick="${act}">Show me →</button></div>`).join("");
-  $("#modelTable").innerHTML = `<table><tr><th>AI</th><th>Owner</th><th>Version</th><th>Used for</th><th>Risk level</th><th>Status</th></tr>` +
-    o.models.map(m => `<tr class="click" onclick="show('${m.file}')"><td><b>${m.name}</b><br><small>${m.id}</small></td><td>${m.owner}</td><td>${m.version}</td><td>${m.use_case}</td><td>${tierPill(m.tier)}</td><td>${verdictPill(m.ok)}${m.why.length ? "<br><small class='no'>" + m.why.join("<br>") + "</small>" : ""}</td></tr>`).join("") + "</table>";
-  $("#dataTable").innerHTML = `<table><tr><th>Dataset</th><th>Where it came from</th><th>Licence</th><th>Rows</th><th>Fingerprint</th><th>Privacy note</th></tr>` +
-    o.datasets.map(d => `<tr class="click" onclick="show('${d.file}')"><td><b>${d.name}</b></td><td><small>${d.url}</small></td><td>${d.license}</td><td>${(d.rows || 0).toLocaleString()}</td><td><code style="margin:0">${d.sha}…</code></td><td>${d.privacy ? "<span class='yes'>✓ present</span>" : "<span class='no'>✗ missing</span>"}</td></tr>`).join("") + "</table>";
-  const R = o.rules, T = R.tiers;
-  $("#rules").innerHTML = `<p class="note" style="margin:0 0 10px"><b>Every AI card needs:</b> ${R.all.join(" · ")}<br><b>Every data card needs:</b> ${R.datasets.join(" · ")}</p><div class="tiers">
-    <div class="tierbox"><b>${tierPill("unacceptable")}</b>Can never be released.</div>
-    <div class="tierbox"><b>${tierPill("high")}</b>Also needs:<ul>${T.high.fields.map(f => `<li>${f}</li>`).join("")}<li>Fair: the least-approved group gets at least ${T.high.fairness.disparate_impact_min * 100}% of the most-approved group's rate</li><li>Fair: among people who qualify, groups differ by at most ${T.high.fairness.equal_opportunity_diff_max * 100} points</li><li>Approved by someone who didn't build it</li></ul></div>
-    <div class="tierbox"><b>${tierPill("limited")}</b>Also needs:<ul>${T.limited.fields.map(f => `<li>${f}</li>`).join("")}</ul></div>
-    <div class="tierbox"><b>${tierPill("minimal")}</b>Only the basics.</div></div>
-    <p class="note">From <code style="display:inline">registry/policy.yaml</code>. Risk levels come from the EU AI Act. The 80% rule is an existing US fairness standard.</p>`;
-  $("#riskChains").innerHTML = o.models.map(m => `<div class="panel" style="margin-bottom:12px"><div class="chain"><b style="min-width:170px">${m.name}</b>
-    <div class="step"><small>The team says it's for</small>${m.use_case}</div><div class="arrow">→</div><div class="step"><small>EU AI Act says</small>${m.basis}</div><div class="arrow">→</div>
-    <div class="step"><small>Our checker decides</small>${tierPill(m.tier)}</div><div class="step"><small>The team wrote</small>${m.declared} ${m.declared == m.tier ? "<span class='yes'>✓ matches</span>" : "<span class='no'>✗ mismatch</span>"}</div></div></div>`).join("");
-});
-window.show = async p => { go("registry"); const t = await (await fetch("/api/file?p=" + encodeURIComponent(p))).text();
-  $("#cardView").innerHTML = `<h3>${p}</h3><pre>${t.replace(/[<&]/g, c => ({"<": "&lt;", "&": "&amp;"}[c]))}</pre>`; $("#cardView").scrollIntoView({behavior: "smooth"}); };
+function checksHTML(r) {
+  const head = r.ok ? `<div class="verdict ok">${icon("ok")} Released</div>` : `<div class="verdict bad">${icon("no")} Blocked</div>`;
+  const why = r.why.length ? `<p class="because">${r.why.join(" ")}</p>` : `<p class="because">It passed every check that applies to it.</p>`;
+  const list = Object.entries(QUESTIONS).map(([g, q]) => { const s = r.status[g];
+    return `<div class="ck ${s == "n/a" ? "na" : s}"><span class="ic">${icon(s == "pass" ? "ok" : s == "fail" ? "no" : "na")}</span>${q}${s == "n/a" ? "<small>not needed at this risk level</small>" : ""}</div>`; }).join("");
+  const detail = r.detail.length ? `<details><summary>The checker's exact words</summary><pre>${esc(r.detail.join("\n"))}</pre></details>` : "";
+  return head + why + `<div class="checks">${list}</div>` + detail;
+}
+async function gate(target, model, breaks = []) {
+  target.innerHTML = wait("Running the five checks…");
+  target.innerHTML = checksHTML(await J("/api/gate", {model, breaks}));
+}
 
-// ---- 2 classify
-$("#useCase").innerHTML = [["High risk (Annex III)", USES.high], ["Banned (Article 5)", USES.banned], ["Other", USES.other]].map(([g, o]) =>
-  `<optgroup label="${g}">${Object.entries(o).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</optgroup>`).join("");
-$("#classifyBtn").onclick = async () => { const r = await J("/api/classify", {use_case: $("#useCase").value, people: $("#people").checked, content: $("#content").checked});
-  $("#classifyOut").innerHTML = `<div class="decision">${tierPill(r.tier)}</div><p>${r.basis}</p>${!r.deployable ? "<div class='banner bad'>Banned: it can never be released.</div>" :
-    `<p class="note">On top of the basics, it needs:</p><ul style="padding-left:20px;margin-top:6px">${r.fields.map(f => `<li>${f}</li>`).join("")}${r.fairness ? "<li>Pass the fairness checks</li>" : ""}${r.approval ? "<li>Independent sign-off</li>" : ""}${!r.fields.length && !r.fairness ? "<li>Nothing extra</li>" : ""}</ul>`}`; };
+const STEPS = [
+ { // 0 welcome
+  html: () => `<h1>Every AI must pass a checkpoint before it's released.</h1>
+   <p class="lede">A company needs every model to be <b>documented</b>, <b>risk-rated</b> and <b>approved</b> before release. We built the system that checks this automatically.</p>
+   <div class="flow"><span>The team writes a card</span><svg class="i arr"><use href="#i-arrow"/></svg><span>The checker runs on GitHub</span><svg class="i arr"><use href="#i-arrow"/></svg><span>Five checks</span><svg class="i arr"><use href="#i-arrow"/></svg><span class="end"><b style="color:var(--ok)">Released</b> <span style="color:var(--ink3);font-weight:400">or</span> <b style="color:var(--bad)">Blocked</b></span></div>
+   <p class="quote">On the next screens we prove each part of the task, live.</p>`, next: "Start"},
+ { // 1 registry
+  html: () => `<h1>Every AI and every dataset has a card.</h1>
+   <p class="lede">A card is a short document: what it's for, who owns it, its limits, who approved it. All cards live together on GitHub. This is the <b>registry</b>.</p>
+   <div class="stage" id="reg">${wait("Opening the registry…")}</div>`,
+  run: async () => { const o = await overview();
+   const row = (t, s, right, file) => `<button class="li btnrow" onclick="card('${file}', this)"><div><div class="t">${t}</div><div class="s">${s}</div></div><div>${right}${icon("chev", "i chev")}</div></button>`;
+   $("#reg").innerHTML = `<div class="group-h">AI models</div><div class="list">` + o.models.map(m => row(m.name, `${m.use_case} · owner ${m.owner}`,
+     m.ok ? `<span class="badge ok">${icon("ok")}Released</span>` : `<span class="badge bad">${icon("no")}Blocked</span>`, m.file)).join("") + `</div>
+     <div class="group-h">Datasets</div><div class="list">` + o.datasets.map(d => row(d.name, `${(d.rows || 0).toLocaleString()} rows · ${d.license.split(";")[0].split("(")[0]}`, `<span class="badge tier">Public</span>`, d.file)).join("") + `</div>
+     <div id="cardview"></div>
+     <details><summary>What must a card contain?</summary><div class="detail-body">${rulesHTML(o.rules)}</div></details>`; }},
+ { // 2 risk
+  html: () => `<h1>The checker decides how risky each AI is.</h1>
+   <p class="lede">The team only says what the AI is <b>used for</b>. The checker looks that up in the <b>EU AI Act</b>, so nobody can call a loan AI harmless to skip the rules.</p>
+   <div class="stage" id="risk">${wait("Checking…")}</div>`,
+  run: async () => { const o = await overview();
+   const opts = [["High risk", USES.high], ["Banned", USES.banned], ["Everything else", USES.other]].map(([g, x]) =>
+     `<optgroup label="${g}">${Object.entries(x).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</optgroup>`).join("");
+   $("#risk").innerHTML = `<div class="list">` + o.models.map(m => `<div class="li"><div><div class="t">${m.name}</div><div class="s">Used for: ${m.use_case}</div></div><div class="center"><span class="badge tier">${TIER[m.tier]}</span><div class="s" style="font-size:12px;color:var(--ink3);margin-top:4px">${m.basis}</div></div></div>`).join("") + `</div>
+     <div class="group-h center" style="margin-top:40px">Try any use</div>
+     <div class="try"><select id="use">${opts}</select><button class="act" onclick="classify()">Check its risk level</button></div><div class="result" id="cls"></div>`; }},
+ { // 3 checkpoint
+  html: () => `<h1>Five checks decide if an AI is released.</h1>
+   <p class="lede">Pick one of our three example AIs and run the checks. This is the real checker, the same one GitHub runs.</p>
+   <div class="stage center"><div class="seg" id="seg"><button data-m="income-fair" class="on">Fair loan AI</button><button data-m="income-baseline">First loan AI</button><button data-m="taxi-eta">Taxi trip-time AI</button></div>
+   <div style="margin-top:18px"><button class="act primary" id="runck">Run the checks</button></div><div id="ckout"></div></div>`,
+  run: () => { let m = "income-fair";
+   document.querySelectorAll("#seg button").forEach(b => b.onclick = () => { document.querySelectorAll("#seg button").forEach(x => x.classList.remove("on")); b.classList.add("on"); m = b.dataset.m; $("#ckout").innerHTML = ""; });
+   $("#runck").onclick = () => gate($("#ckout"), m); }},
+ { // 4 fairness
+  html: () => `<h1>An unfair AI is blocked.</h1>
+   <p class="lede">The first loan AI never sees anyone's race. We test it on <b>39,133 real people</b> and count how often each group gets a "yes".</p>
+   <div class="stage center"><button class="act primary" id="runfair">Run the fairness test</button><div id="fairout"></div></div>`,
+  run: () => { $("#runfair").onclick = async () => { $("#runfair").disabled = true; $("#fairout").innerHTML = wait("Both AIs are answering for 39,133 people…");
+   const r = await J("/api/audit"), b = r["income-baseline"], f = r["income-fair"]; $("#runfair").disabled = false;
+   $("#fairout").innerHTML = `<div class="legend"><span><i class="sw" style="background:var(--first)"></i>First loan AI</span><span><i class="sw" style="background:var(--fair)"></i>Fair loan AI</span></div>
+    <div class="bars">${b.groups.map((g, i) => `<div class="br"><div class="n">${g.group}</div><div class="pair"><div class="bar" style="width:${g.rate * 150}%;background:var(--first)"><i>${pct(g.rate)}</i></div><div class="bar" style="width:${f.groups[i].rate * 150}%;background:var(--fair)"><i>${pct(f.groups[i].rate)}</i></div></div></div>`).join("")}</div>
+    <p class="because" style="margin-top:26px">The rule: the least-approved group must get at least <b>80%</b> of the most-approved group's rate.</p>
+    <div class="facts"><div class="fact"><b style="color:var(--bad)">${b.di.toFixed(2)}</b><span>First loan AI · blocked</span></div><div class="fact"><b style="color:var(--ok)">${f.di.toFixed(2)}</b><span>Fair loan AI · passes</span></div><div class="fact"><b>${pct(b.accuracy)} → ${pct(f.accuracy)}</b><span>accuracy: the cost of being fair</span></div></div>
+    <details><summary>Run the checker on the first loan AI</summary><div id="fairgate"></div></details>`;
+   $("#fairout details").addEventListener("toggle", e => e.target.open && gate($("#fairgate"), "income-baseline"), {once: true}); }; }},
+ { // 5 documentation
+  html: () => `<h1>Missing paperwork is blocked.</h1>
+   <p class="lede">The taxi AI is low risk, so it needs no fairness test or sign-off. But its card has <b>no "limitations" section</b>, and its dataset has no privacy note.</p>
+   <div class="stage center"><button class="act primary" id="rundoc">Run the checks on the taxi AI</button><div id="docout"></div></div>`,
+  run: () => { $("#rundoc").onclick = () => gate($("#docout"), "taxi-eta"); }},
+ { // 6 lineage
+  html: () => `<h1>Changed evidence is caught.</h1>
+   <p class="lede">When an AI is trained, a <b>fingerprint</b> of its test results is saved. Let's secretly edit the fair AI's results to look perfect, and run the checks again.</p>
+   <div class="stage center"><button class="act primary" id="runlin">Edit the results and run the checks</button><div id="linout"></div>
+   <details><summary>Try other tricks</summary><div class="row-actions" style="margin-top:6px">
+    <button class="act" onclick="gate($('#linout'), 'income-fair', ['withdraw_approval'])">Manager withdraws approval</button>
+    <button class="act" onclick="gate($('#linout'), 'income-fair', ['claim_minimal'])">Claim it's minimal risk</button>
+    <button class="act" onclick="gate($('#linout'), 'income-fair', ['delete_limitations'])">Delete its limitations</button></div>
+    <p class="detail-body center" style="margin-top:12px">Each trick runs on a throwaway copy. Your real files never change.</p></details></div>`,
+  run: () => { $("#runlin").onclick = () => gate($("#linout"), "income-fair", ["edit_results"]); }},
+ { // 7 github
+  html: () => `<h1>GitHub runs the checks on every change.</h1>
+   <p class="lede">Someone proposed a change that deletes the fair AI's limitations. GitHub ran our checker and <b>refused to let the change in</b>. This is live from GitHub.</p>
+   <div class="stage" id="gh">${wait("Asking GitHub…")}</div>`,
+  run: async () => { const g = await J("/api/github"), repo = `https://github.com/${g.repo}`;
+   if (g.error) { $("#gh").innerHTML = `<p class="because">GitHub can't be reached right now.</p><div class="row-actions" style="margin-top:20px"><a class="act" href="${repo}/pull/1" target="_blank">Open the proposed change</a></div>`; return; }
+   const pr = g.pr, row = c => { const ok = c.conclusion == "success", req = g.required.includes(c.name);
+     return `<div class="ck ${c.status != "completed" ? "na" : ok ? "pass" : "fail"}" ${req ? "" : 'style="opacity:.55;font-weight:400"'}><span class="ic">${icon(ok ? "ok" : c.status != "completed" ? "na" : "no")}</span>${c.name}<small>${req ? "required" : "not required"}</small></div>`; };
+   const checks = pr ? pr.checks.filter(c => c.name != "discover") : [], blocked = checks.some(c => g.required.includes(c.name) && c.conclusion == "failure");
+   $("#gh").innerHTML = pr ? `<div class="verdict ${blocked ? "bad" : "ok"}">${icon(blocked ? "no" : "ok")} ${blocked ? "Merging is blocked" : "Checks passing"}</div>
+     <p class="because">Proposed change #${pr.number}: "${esc(pr.title)}"</p><div class="checks">${checks.map(row).join("")}</div>
+     <div class="row-actions" style="margin-top:26px"><a class="act primary" href="${pr.url}" target="_blank">Open it on GitHub</a><a class="act" href="${repo}/actions" target="_blank">See every check run</a></div>
+     <details><summary>And the current version?</summary><div class="checks">${g.main.filter(c => c.name != "discover").map(row).join("")}</div><p class="detail-body center" style="margin-top:12px">The fair AI passes, so it is released. The other two are blocked on purpose.</p></details>`
+     : `<p class="because">No proposed change found.</p>`; }},
+ { // 8 scale
+  html: () => `<h1>It works at bank scale.</h1>
+   <p class="lede">A bank has millions of applications. Our fairness check runs on <b>Apache Spark</b>, which shares the work across the computer's processor cores.</p>
+   <div class="stage center"><button class="act primary" id="runscale">Check 1.6 million applications now</button><div id="scaleout"></div>
+   <div class="group-h center" style="margin-top:46px">Measured earlier on 25 million applications</div>
+   <div class="bars" style="margin-top:12px"><div class="br"><div class="n">Normal Python</div><div class="bar" style="width:72%;background:var(--first)"><i>85 s</i></div></div><div class="br"><div class="n">Spark, 8 cores</div><div class="bar" style="width:17%;background:var(--fair)"><i>20 s · 4.3× faster, same answer</i></div></div></div>
+   <p class="quote" style="margin-top:28px">The 1.6 million are the census people copied with new IDs, so this tests speed, not new findings.</p></div>`,
+  run: () => { $("#runscale").onclick = async () => { $("#runscale").disabled = true; $("#scaleout").innerHTML = wait("Spark is checking 1.6 million applications…");
+   const r = await J("/api/scale"); $("#runscale").disabled = false;
+   $("#scaleout").innerHTML = `<div class="facts"><div class="fact"><b>${r.rows.toLocaleString()}</b><span>applications checked</span></div><div class="fact"><b>${r.seconds.toFixed(1)} s</b><span>time taken</span></div><div class="fact"><b style="color:var(--bad)">${r.di.toFixed(2)}</b><span>fairness · still blocked</span></div></div>`; }; }},
+ { // 9 recap
+  html: () => `<h1>Everything we were asked to do.</h1>
+   <p class="lede">Each line of the task, and where we just proved it.</p>
+   <div class="stage recap" id="recap"></div>`, next: "Try the AI yourself",
+  run: async () => { const o = await overview(), rel = o.models.filter(m => m.ok).length;
+   const L = [["Build a registry of model and dataset cards", `${o.models.length} AI cards, ${o.datasets.length} data cards`, 1],
+    ["Risk classification based on the EU AI Act", "Worked out from what each AI is used for", 2],
+    ["Block deployment when fairness fails", "First loan AI blocked", 4], ["…when documentation is missing", "Taxi AI blocked", 5],
+    ["…when lineage can't be trusted", "Edited results caught", 6], ["CI checks that block deployment", "GitHub refused the change", 7],
+    ["Three example models that pass or fail", `${rel} released, ${o.models.length - rel} blocked`, 3], ["Big data, with measured proof", "1.6 million live · 4.3× faster on 25 million", 8]];
+   $("#recap").innerHTML = `<div class="list">` + L.map(([a, b, s]) => `<button class="li btnrow" onclick="go(${s})"><span class="ok">${icon("ok")}</span><div><div class="t">${a}</div><div class="s">${b}</div></div>${icon("chev", "i chev")}</button>`).join("") + `</div>`; }},
+ { // 10 try
+  html: () => `<h1>Try the loan AI yourself.</h1>
+   <p class="lede">This is the example AI our checker tests. It guesses whether someone earns over $50,000. It is never told their race or sex.</p>
+   <div class="form" id="form"></div><div class="row-actions" style="margin-top:22px"><button class="act primary" id="ask">Ask the AI</button><button class="act" id="real">Load a real person</button></div><div id="answers"></div>`, next: "Back to the start",
+  run: () => { const F = [["AGEP", "Age"], ["SCHL", "Education"], ["OCCP", "Job"], ["COW", "Employer"], ["WKHP", "Hours a week"], ["MAR", "Marital status"], ["POBP", "Born in"], ["RELP", "Role at home"]];
+   $("#form").innerHTML = F.map(([k, l]) => `<label>${l}${C[k] ? `<select id="${k}">${Object.entries(C[k]).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>` : `<input id="${k}" type="number" value="${k == "AGEP" ? 35 : 40}">`}</label>`).join("");
+   const ask = async truth => { const r = await J("/api/predict", Object.fromEntries(F.map(([k]) => [k, $("#" + k).value])));
+     const a = (m, n) => `<div class="answer"><span>${n} says</span><b style="color:${r[m].yes ? "var(--ok)" : "var(--bad)"}">${r[m].yes ? "Yes, over $50k" : "No"}</b><span>${pct(r[m].chance)} sure it's a yes</span></div>`;
+     $("#answers").innerHTML = `<div class="answers">${a("income-baseline", "First loan AI")}${a("income-fair", "Fair loan AI")}</div>` +
+       (truth ? `<p class="truth">A real person from the US Census (${truth.sex}, race group "${truth.race}", never shown to the AI). Really earns over $50k: <b style="color:${truth.truth ? "var(--ok)" : "var(--bad)"}">${truth.truth ? "Yes" : "No"}</b></p>` : `<p class="truth">Change the job or the hours and ask again.</p>`); };
+   $("#ask").onclick = () => ask(null);
+   $("#real").onclick = async () => { const p = await J("/api/sample"); F.forEach(([k]) => $("#" + k).value = p[k]); ask(p); }; }},
+];
 
-// ---- 3 gate
-const Q = {risk: "How risky is it? (EU AI Act)", documentation: "Is the paperwork complete?", lineage: "Can we trace where it came from?", fairness: "Is it fair to every group?", approval: "Did someone independent approve it?"};
-let chosen = "income-fair";
-$("#models").innerHTML = [["income-fair", "Fair loan AI", "high risk"], ["income-baseline", "First loan AI", "high risk"], ["taxi-eta", "Taxi trip-time AI", "minimal risk"]].map(([id, n, s]) =>
-  `<button class="chip ${id == chosen ? "on" : ""}" data-id="${id}">${n}<small>${s}</small></button>`).join("");
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => { document.querySelectorAll(".chip").forEach(x => x.classList.remove("on")); c.classList.add("on"); chosen = c.dataset.id; });
-$("#gateBtn").onclick = () => runGate(chosen, [...document.querySelectorAll(".breaks input:checked")].map(i => i.value));
-window.runGate = async (model, breaks) => { go("gate"); chosen = model;
-  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.id == model));
-  document.querySelectorAll(".breaks input").forEach(i => i.checked = breaks.includes(i.value));
-  $("#gateBtn").disabled = true; busy($("#gateOut"), "Running the 5 checks…"); const r = await J("/api/gate", {model, breaks}); $("#gateBtn").disabled = false;
-  $("#gateOut").innerHTML = `<small style="color:var(--muted)">${r.id} · ${r.basis}</small><div class="decision ${r.ok ? "yes" : "no"}">${r.ok ? "✓ Released" : "✗ Blocked"}</div>
-   <div class="lights">${Object.entries(Q).map(([g, q]) => `<div class="${r.status[g] == "n/a" ? "na" : r.status[g]}"><span class="dot">${{pass: "✓", fail: "✗", "n/a": "–"}[r.status[g]]}</span>${q}${r.status[g] == "n/a" ? " (not needed for this risk level)" : ""}</div>`).join("")}</div>
-   ${r.why.length ? `<ul class="why">${r.why.map(w => `<li>${w}</li>`).join("")}</ul><code>${r.detail.join("\n")}</code>` : ""}
-   ${r.fairness.RAC1P ? `<p class="note">Fairness score by race ${r.fairness.RAC1P.di.toFixed(2)} (needs 0.80) · by sex ${r.fairness.SEX.di.toFixed(2)}</p>` : ""}`; };
+async function overview() { return O || (O = await J("/api/overview")); }
+function rulesHTML(R) {
+  const T = R.tiers, row = (n, t) => `<div class="tierrow"><b>${n}</b><span>${t}</span></div>`;
+  return `<p style="margin-bottom:10px">Every AI card: ${R.all.join(", ").toLowerCase()}. Every data card: ${R.datasets.join(", ").toLowerCase()}.</p>` +
+    row("Banned", "Can never be released.") +
+    row("High risk", `Also: ${T.high.fields.join(", ").toLowerCase()}; pass the fairness checks; approved by someone who didn't build it.`) +
+    row("Limited risk", `Also: ${T.limited.fields.join(", ").toLowerCase()}.`) + row("Minimal risk", "Only the basics.") +
+    `<div class="row-actions" style="margin-top:16px"><button class="link" onclick="card('registry/policy.yaml')">Open the rule book</button><button class="link" onclick="card('.github/workflows/governance-gate.yml')">Open the GitHub setup</button></div>`;
+}
+window.card = async (p, el) => { const t = await (await fetch("/api/file?p=" + encodeURIComponent(p))).text(), v = $("#cardview");
+  v.innerHTML = `<div class="group-h">${esc(p)}</div><pre>${esc(t)}</pre>`; v.scrollIntoView({behavior: "smooth", block: "center"}); };
+window.classify = async () => { const r = await J("/api/classify", {use_case: $("#use").value});
+  $("#cls").innerHTML = `<span class="badge ${r.deployable ? "tier" : "bad"}" style="font-size:17px;padding:8px 16px">${TIER[r.tier]}</span><p class="because" style="margin-top:10px">${r.basis}. ${!r.deployable ? "It can never be released." : r.fairness ? "It needs the fairness checks and an independent sign-off." : r.fields.length ? "It must tell people they're using an AI." : "Only the basic card is needed."}</p>`; };
+window.gate = gate;
 
-// ---- 4 github
-let ghLoaded = false;
-window.loadGH = async () => { if (ghLoaded) return; ghLoaded = true;
-  const g = await J("/api/github"), repo = `https://github.com/${g.repo}`;
-  if (g.error) { $("#ghOut").innerHTML = `<div class="panel">Couldn't reach GitHub (${g.error}).<br><a class="btn" href="${repo}/actions" target="_blank">Open GitHub Actions →</a><a class="btn light" href="${repo}/pulls?q=is%3Apr" target="_blank">Open pull requests →</a></div>`; return; }
-  const icon = c => c.status != "completed" ? "<span class='spin'></span>running" : c.conclusion == "success" ? "<b class='yes'>✓ passed</b>" : c.conclusion == "skipped" ? "skipped" : "<b class='no'>✗ failed</b>";
-  const list = cs => cs.filter(c => c.name != "discover").map(c => `<div class="ghcheck"><a href="${c.url}" target="_blank">${c.name}</a><span>${g.required.includes(c.name) ? "<small style='color:var(--muted)'>required · </small>" : ""}${icon(c)}</span></div>`).join("");
-  const blocked = cs => g.required.some(n => (cs.find(c => c.name == n) || {}).conclusion == "failure");
-  const pr = g.pr;
-  $("#ghOut").innerHTML = `<div class="gh"><div class="panel"><b>Current version</b>${list(g.main)}<p class="note">The fair AI passes and is released. The other two are blocked on purpose.</p><a class="btn light" href="${repo}/actions" target="_blank">Open on GitHub →</a></div>
-    <div class="panel">${pr ? `<b>Proposed change #${pr.number}: ${pr.title}</b>${list(pr.checks)}
-    ${blocked(pr.checks) ? "<div class='banner bad'>✗ This change can't go in: a required check failed</div>" : "<div class='banner ok'>Checks passing</div>"}
-    <a class="btn" href="${pr.url}" target="_blank">Open it on GitHub →</a>` : "<b>No demo pull request found.</b>"}</div></div>`; };
-
-// ---- 5 evidence
-$("#auditBtn").onclick = async () => { $("#auditBtn").disabled = true; busy($("#auditOut"), "Testing both AIs on 39,133 people…"); const r = await J("/api/audit"); $("#auditBtn").disabled = false;
-  const b = r["income-baseline"], f = r["income-fair"];
-  $("#auditOut").innerHTML = `<p class="note">Both AIs answered for ${r.people.toLocaleString()} people in ${r.seconds.toFixed(1)} s.</p>
-   <div class="stats"><div class="stat"><small>First AI: fairness score</small><b class="no">${b.di.toFixed(2)}</b><small>needs 0.80 or more, so blocked</small></div>
-   <div class="stat"><small>Fair AI: fairness score</small><b class="yes">${f.di.toFixed(2)}</b><small>passes</small></div>
-   <div class="stat"><small>First AI: accuracy</small><b>${pct(b.accuracy)}</b></div><div class="stat"><small>Fair AI: accuracy</small><b>${pct(f.accuracy)}</b><small>the cost of being fair</small></div></div>
-   <div class="panel"><div class="legend" style="margin-bottom:10px"><span><i class="sw" style="background:var(--base)"></i>First AI</span><span><i class="sw" style="background:var(--fair)"></i>Fair AI</span><span style="color:var(--muted)">How often each race group gets a "yes"</span></div>
-   ${b.groups.map((g, i) => `<div class="grp"><div class="gname">${g.group}<br><small style="color:var(--muted)">${g.n.toLocaleString()} people</small></div><div>
-     <div class="b" style="width:${g.rate * 150}%;background:var(--base)"><span>${pct(g.rate)}</span></div><div class="b" style="width:${f.groups[i].rate * 150}%;background:var(--fair);margin-top:3px"><span>${pct(f.groups[i].rate)}</span></div></div></div>`).join("")}
-   <p class="note">Neither AI sees race. The first AI still picked it up from other clues, like job, birthplace and hours worked.</p></div>`; };
-$("#scaleBtn").onclick = async () => { $("#scaleBtn").disabled = true; busy($("#scaleOut"), "Spark is checking 1.6 million applications…"); const r = await J("/api/scale"); $("#scaleBtn").disabled = false;
-  $("#scaleOut").innerHTML = `<div class="stats"><div class="stat"><small>Applications checked</small><b>${r.rows.toLocaleString()}</b></div><div class="stat"><small>Time taken</small><b>${r.seconds.toFixed(1)} s</b></div>
-   <div class="stat"><small>Fairness score (first AI)</small><b class="no">${r.di.toFixed(2)}</b><small>same answer at full size: blocked</small></div></div>`; };
-
-// ---- 6 try
-const FIELDS = [["AGEP","Age"],["SCHL","Education"],["OCCP","Job"],["COW","Employer"],["WKHP","Hours worked per week"],["MAR","Marital status"],["POBP","Born in"],["RELP","Role in household"]];
-$("#form").innerHTML = FIELDS.map(([k, l]) => `<label>${l}</label>` + (C[k] ? `<select id="${k}">${Object.entries(C[k]).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>`
-  : `<input id="${k}" type="number" value="${k == "AGEP" ? 35 : 40}">`)).join("") + `<button class="btn" id="askBtn">Ask the AI</button><button class="btn light" id="realBtn">Load a real applicant</button>`;
-async function ask(truth) { const r = await J("/api/predict", Object.fromEntries(FIELDS.map(([k]) => [k, $("#" + k).value])));
-  $("#answers").innerHTML = [["income-baseline", "First AI", "var(--base)"], ["income-fair", "Fair AI", "var(--fair)"]].map(([m, n, c]) =>
-    `<div class="ans"><h3>${n} says</h3><div class="verdict ${r[m].yes ? "yes" : "no"}">${r[m].yes ? "✓ Yes, over $50k" : "✗ No"}</div><small>Confidence it's a yes: ${pct(r[m].chance)}</small><div class="meter"><i style="width:${r[m].chance * 100}%;background:${c}"></i></div></div>`).join("");
-  $("#truth").innerHTML = truth ? `<div class="truth">A <b>real person</b> from the US Census (${truth.sex}, race group "${truth.race}", never shown to the AI). Really earns over $50k? <b class="${truth.truth ? "yes" : "no"}">${truth.truth ? "YES" : "NO"}</b></div>`
-    : `<p class="note">Change any answer and press "Ask the AI" again.</p>`; }
-$("#askBtn").onclick = () => ask(null);
-$("#realBtn").onclick = async () => { const p = await J("/api/sample"); FIELDS.forEach(([k]) => $("#" + k).value = p[k]); ask(p); };
-ask(null);
-</script></body></html>"""
+let cur = 0;
+const main = $("#main");
+main.innerHTML = STEPS.map((s, i) => `<section class="step" id="s${i}" aria-label="Step ${i + 1}"></section>`).join("");
+$("#dots").innerHTML = STEPS.map((_, i) => `<button aria-label="Go to step ${i + 1}" onclick="go(${i})"><span class="dot" id="d${i}"></span></button>`).join("");
+const loaded = new Set();
+window.go = i => {
+  cur = Math.max(0, Math.min(STEPS.length - 1, i));
+  document.querySelectorAll(".step").forEach(s => s.classList.remove("on"));
+  const sec = $("#s" + cur);
+  if (!loaded.has(cur)) { sec.innerHTML = STEPS[cur].html(); loaded.add(cur); STEPS[cur].run && STEPS[cur].run(); }
+  sec.classList.add("on");
+  STEPS.forEach((_, j) => { $("#d" + j).className = "dot" + (j == cur ? " on" : j < cur ? " done" : ""); });
+  $("#count").textContent = `${cur + 1} of ${STEPS.length}`;
+  $("#back").disabled = cur == 0;
+  $("#next").textContent = STEPS[cur].next || "Continue";
+  window.scrollTo({top: 0}); history.replaceState(null, "", "#" + cur);
+};
+$("#next").onclick = () => go(cur == STEPS.length - 1 ? 0 : cur + 1);
+$("#back").onclick = () => go(cur - 1);
+document.addEventListener("keydown", e => { if (e.target.closest("select,input")) return;
+  if (e.key == "ArrowRight") go(cur + 1); if (e.key == "ArrowLeft") go(cur - 1); });
+overview();
+go(+location.hash.slice(1) || 0);
+</script></body></html>
+"""
 
 
 if __name__ == "__main__":
