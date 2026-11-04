@@ -1,0 +1,184 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Governance Registry with Deployment Gates</title><style>
+:root { --ink:#0b0b0b; --muted:#52514e; --line:#e2e1dc; --bg:#fcfcfb; --base:#eb6834; --fair:#2a78d6; --ok:#0a7d0a; --bad:#c62f2f; }
+* { box-sizing:border-box; margin:0; }
+html { scroll-snap-type:y mandatory; scroll-behavior:smooth; }
+body { font:20px/1.5 -apple-system,"Helvetica Neue",Arial,sans-serif; color:var(--ink); background:var(--bg); }
+section { min-height:100vh; scroll-snap-align:start; padding:7vh 8vw 6vh; display:flex; flex-direction:column; justify-content:center; border-bottom:1px solid var(--line); }
+.step { color:var(--fair); font-weight:700; letter-spacing:.06em; text-transform:uppercase; font-size:16px; }
+h1 { font-size:clamp(36px,4.6vw,64px); line-height:1.1; margin:.3em 0 .4em; }
+h2 { font-size:clamp(30px,3.4vw,46px); line-height:1.15; margin:.25em 0 .6em; }
+.lead { font-size:clamp(20px,1.7vw,26px); color:var(--muted); max-width:62ch; }
+small { display:block; color:var(--muted); font-size:14px; font-weight:400; }
+.flow { display:flex; align-items:stretch; gap:14px; margin:10px 0 34px; flex-wrap:wrap; }
+.fbox { flex:1; min-width:170px; background:white; border:2px solid var(--line); border-radius:16px; padding:18px 20px; font-size:18px; }
+.fbox b { display:block; font-size:20px; margin-bottom:4px; }
+.arrow { align-self:center; font-size:30px; color:var(--muted); }
+.fbox.end { border-color:var(--ink); }
+.checks { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; }
+.check { background:white; border:2px solid var(--line); border-radius:16px; padding:18px; }
+.check .num { width:34px; height:34px; border-radius:50%; background:var(--fair); color:white; display:grid; place-items:center; font-weight:700; margin-bottom:10px; }
+.check b { font-size:19px; } .check p { font-size:15px; color:var(--muted); margin-top:6px; }
+.person { display:grid; grid-template-columns:1.2fr 1fr; gap:30px; align-items:center; }
+.pcard { background:white; border:2px solid var(--line); border-radius:20px; padding:30px 34px; font-size:24px; }
+.pcard .truth { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); font-weight:700; }
+.ai { display:flex; flex-direction:column; gap:16px; }
+.aianswer { border-radius:16px; padding:22px 26px; font-size:24px; background:white; border:2px solid var(--line); }
+.aianswer b { font-size:30px; } .no { color:var(--bad); } .yes { color:var(--ok); }
+.legend { display:flex; gap:26px; margin-bottom:14px; font-size:17px; }
+.sw { display:inline-block; width:16px; height:16px; border-radius:4px; vertical-align:-2px; margin-right:7px; }
+.grp { display:grid; grid-template-columns:230px 1fr; gap:16px; align-items:center; margin:6px 0; }
+.gname { font-size:17px; text-align:right; } .gname small { font-size:13px; }
+.gbars { display:flex; flex-direction:column; gap:3px; }
+.b, .sbar { height:20px; border-radius:0 4px 4px 0; position:relative; min-width:2px; }
+.b span, .sbar span { position:absolute; left:calc(100% + 8px); top:-2px; font-size:15px; color:var(--ink); white-space:nowrap; }
+.base { background:var(--base); } .fair { background:var(--fair); }
+.rule { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:26px; }
+.rulebox { background:white; border:2px solid var(--line); border-radius:16px; padding:18px 22px; font-size:19px; }
+.big { font-size:40px; font-weight:800; }
+.cards { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; }
+.card { background:white; border:2px solid var(--line); border-radius:18px; padding:22px; display:flex; flex-direction:column; gap:14px; }
+.cardhead { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.cardhead b { font-size:19px; }
+.verdict { font-weight:800; padding:6px 12px; border-radius:10px; white-space:nowrap; font-size:17px; }
+.verdict.ok { background:#e3f4e3; color:var(--ok); } .verdict.bad { background:#fbe4e4; color:var(--bad); }
+.lights { display:flex; flex-direction:column; gap:6px; }
+.light { font-size:15px; display:flex; align-items:center; gap:10px; color:var(--muted); }
+.light span { width:24px; height:24px; border-radius:50%; display:grid; place-items:center; font-weight:800; font-size:14px; flex:none; }
+.light.ok span { background:#e3f4e3; color:var(--ok); } .light.bad span { background:#fbe4e4; color:var(--bad); }
+.light.bad { color:var(--ink); font-weight:600; } .light.na span { background:#efeeea; color:#8a8984; }
+.why { font-size:16px; padding-left:20px; color:var(--bad); } p.why.ok { color:var(--ok); padding:0; }
+details { font-size:13px; color:var(--muted); } summary { cursor:pointer; } code { display:block; margin-top:6px; font-size:12px; }
+.two { display:grid; grid-template-columns:1fr 1fr; gap:22px; }
+.scenario { font-size:18px; color:var(--muted); margin-bottom:10px; }
+.srow { display:grid; grid-template-columns:230px 1fr; gap:16px; align-items:center; margin:12px 0; }
+.slabel { text-align:right; font-size:18px; } .sbar { height:30px; } .sbar span { top:3px; font-size:18px; }
+.links a { display:inline-block; margin:8px 12px 8px 0; padding:14px 22px; border-radius:12px; background:var(--ink); color:white; text-decoration:none; font-weight:600; }
+.files { margin-top:30px; display:grid; grid-template-columns:auto 1fr; gap:6px 24px; font-size:17px; }
+.files code { display:inline; font-size:16px; margin:0; color:var(--ink); }
+.note { font-size:15px; color:var(--muted); margin-top:18px; }
+@media (max-width:1000px) { .checks, .cards, .two, .person, .rule { grid-template-columns:1fr; } }
+</style></head><body>
+
+<section>
+  <div class="step">AI Governance Registry with Deployment Gates</div>
+  <h1>Can this AI be trusted<br>with people's loans?</h1>
+  <p class="lead">A bank wants an AI to sort loan applications. EU law calls that <b>high risk</b>: before it's used, it must be documented, fair, traceable and approved.<br><br>
+  Our system checks every AI <b>automatically</b>, and blocks any that fails.</p>
+</section>
+
+<section>
+  <div class="step">How it works</div>
+  <h2>Every AI goes through the same checkpoint</h2>
+  <div class="flow">
+    <div class="fbox"><b>1 · Team builds an AI</b>and fills in its info sheet: what it's for, its limits, who approved it</div><div class="arrow">→</div>
+    <div class="fbox"><b>2 · Uploads it to GitHub</b>the training script also saves a "seal" (fingerprint) of its test results</div><div class="arrow">→</div>
+    <div class="fbox"><b>3 · Our checker runs</b>automatically, on every change, using a written rule book</div><div class="arrow">→</div>
+    <div class="fbox end"><b>4 · Decision</b><span class="yes">✓ Released</span> or <span class="no">✗ Blocked</span>, with the reason</div>
+  </div>
+  <div class="checks"><div class="check"><div class="num">1</div><b>How risky is it?</b><p>Worked out from what it's used for, using EU law</p></div><div class="check"><div class="num">2</div><b>Is the paperwork complete?</b><p>Every section the rule book requires</p></div><div class="check"><div class="num">3</div><b>Can we trace where it came from?</b><p>Data and results match their saved fingerprints</p></div><div class="check"><div class="num">4</div><b>Is it fair to every group?</b><p>Re-measured by the checker, never self-reported</p></div><div class="check"><div class="num">5</div><b>Did someone independent approve it?</b><p>Signed off by a person who didn't build it</p></div></div>
+  <p class="note">The rules come from the EU AI Act and an existing fairness standard (the "four-fifths rule"), not from us. The checker never takes the team's word: it works things out itself.</p>
+</section>
+
+<section>
+  <div class="step">A real example</div>
+  <h2>Meet one applicant</h2>
+  <div class="person">
+    <div class="pcard">A real, anonymised person from the US Census (California, 2018):<br><br>
+      <b>49-year-old woman</b>, bachelor's degree, works 40 hours a week at a private company.
+      <div class="truth">Really earns over $50,000? <span class="yes">YES</span></div></div>
+    <div class="ai">
+      <div class="aianswer">The bank's first AI says<br><b class="no">✗ No</b></div>
+      <div class="aianswer">The fair version says<br><b class="yes">✓ Yes</b></div>
+      <p class="note">Neither AI is ever shown her race (census group: "Some other race") or sex. So is this bad luck, or a pattern?</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="step">The pattern</div>
+  <h2>How often each group gets a "yes"</h2>
+  <div class="legend"><span><i class="sw base"></i>First AI (the "obvious" way)</span><span><i class="sw fair"></i>Fair version</span><span style="color:var(--muted)">39,133 applicants the AI never saw while learning</span></div>
+  <div class="grp"><div class="gname">White<small>24,200 people</small></div><div class="gbars">
+        <div class="b base" style="width:81.6%"><span>45%</span></div>
+        <div class="b fair" style="width:72.1%"><span>40%</span></div></div></div><div class="grp"><div class="gname">Black<small>1,770 people</small></div><div class="gbars">
+        <div class="b base" style="width:65.1%"><span>36%</span></div>
+        <div class="b fair" style="width:69.4%"><span>38%</span></div></div></div><div class="grp"><div class="gname">American Indian<small>245 people</small></div><div class="gbars">
+        <div class="b base" style="width:58.6%"><span>32%</span></div>
+        <div class="b fair" style="width:63.8%"><span>35%</span></div></div></div><div class="grp"><div class="gname">Native tribe (other)<small>114 people</small></div><div class="gbars">
+        <div class="b base" style="width:44.7%"><span>25%</span></div>
+        <div class="b fair" style="width:65.4%"><span>36%</span></div></div></div><div class="grp"><div class="gname">Asian<small>6,557 people</small></div><div class="gbars">
+        <div class="b base" style="width:88.5%"><span>49%</span></div>
+        <div class="b fair" style="width:70.9%"><span>39%</span></div></div></div><div class="grp"><div class="gname">Pacific Islander<small>137 people</small></div><div class="gbars">
+        <div class="b base" style="width:58.4%"><span>32%</span></div>
+        <div class="b fair" style="width:67.7%"><span>37%</span></div></div></div><div class="grp"><div class="gname">Some other race<small>4,520 people</small></div><div class="gbars">
+        <div class="b base" style="width:26.5%"><span>15%</span></div>
+        <div class="b fair" style="width:64.1%"><span>35%</span></div></div></div><div class="grp"><div class="gname">Two or more races<small>1,587 people</small></div><div class="gbars">
+        <div class="b base" style="width:66.3%"><span>36%</span></div>
+        <div class="b fair" style="width:67.0%"><span>37%</span></div></div></div>
+  <div class="rule">
+    <div class="rulebox"><b>The rule:</b> the least-approved group must get at least <b>80%</b> of the most-approved group's rate.</div>
+    <div class="rulebox">First AI: 15% ÷ 49% = <span class="big no">0.30</span> &nbsp; Fair: 35% ÷ 40% = <span class="big yes">0.89</span></div>
+  </div>
+  <p class="note">Hiding race didn't remove the bias: job type, birthplace and hours worked act as stand-ins. The price of fairness: accuracy drops from 82.5% to 74.7%.</p>
+</section>
+
+<section>
+  <div class="step">The checker's decision</div>
+  <h2>Three AI programs submitted. One released.</h2>
+  <div class="cards"><div class="card">
+      <div class="cardhead"><div><b>Loan pre-screen, built with a fairness rule</b><small>income-fair · high risk</small></div><div class="verdict ok">✓ Released</div></div>
+      <div class="lights"><div class="light ok"><span>✓</span>How risky is it?</div><div class="light ok"><span>✓</span>Is the paperwork complete?</div><div class="light ok"><span>✓</span>Can we trace where it came from?</div><div class="light ok"><span>✓</span>Is it fair to every group?</div><div class="light ok"><span>✓</span>Did someone independent approve it?</div></div>
+      <p class="why ok">Passed every check that applies to it.</p>
+    </div><div class="card">
+      <div class="cardhead"><div><b>Loan pre-screen, built the "obvious" way</b><small>income-baseline · high risk</small></div><div class="verdict bad">✗ Blocked</div></div>
+      <div class="lights"><div class="light ok"><span>✓</span>How risky is it?</div><div class="light ok"><span>✓</span>Is the paperwork complete?</div><div class="light ok"><span>✓</span>Can we trace where it came from?</div><div class="light bad"><span>✗</span>Is it fair to every group?</div><div class="light ok"><span>✓</span>Did someone independent approve it?</div></div>
+      <ul class="why"><li>It treats groups of people too differently.</li></ul><details><summary>Exact reason from the checker</summary><code>RAC1P disparate impact 0.299 < 0.8<br>RAC1P equal-opportunity gap 0.331 > 0.1</code></details>
+    </div><div class="card">
+      <div class="cardhead"><div><b>Taxi trip-time estimate (another team)</b><small>taxi-eta · minimal risk</small></div><div class="verdict bad">✗ Blocked</div></div>
+      <div class="lights"><div class="light ok"><span>✓</span>How risky is it?</div><div class="light bad"><span>✗</span>Is the paperwork complete?</div><div class="light bad"><span>✗</span>Can we trace where it came from?</div><div class="light na"><span>–</span>Is it fair to every group?</div><div class="light na"><span>–</span>Did someone independent approve it?</div></div>
+      <ul class="why"><li>Its paperwork is incomplete.</li><li>We can't prove where it came from, or its evidence was changed.</li></ul><details><summary>Exact reason from the checker</summary><code>schema: (root) Additional properties are not allowed ('known_issues' was unexpected)<br>missing limitations<br>dataset nyc-tlc-yellow-2023-01 missing personal_data</code></details>
+    </div></div>
+  <p class="note">A manager had already approved the first AI. It's blocked anyway. Low-risk programs (the taxi one) skip the fairness and sign-off checks; the rules scale with risk.</p>
+</section>
+
+<section>
+  <div class="step">Can someone cheat?</div>
+  <h2>We tried. It caught both.</h2>
+  <div class="two">
+    <div><p class="scenario">The team overwrites its test results with perfect ones, so the unfair AI looks fair.</p><div class="card">
+      <div class="cardhead"><div><b>First AI, with edited results</b><small>income-baseline · high risk</small></div><div class="verdict bad">✗ Blocked</div></div>
+      <div class="lights"><div class="light ok"><span>✓</span>How risky is it?</div><div class="light ok"><span>✓</span>Is the paperwork complete?</div><div class="light bad"><span>✗</span>Can we trace where it came from?</div><div class="light bad"><span>✗</span>Is it fair to every group?</div><div class="light ok"><span>✓</span>Did someone independent approve it?</div></div>
+      <ul class="why"><li>We can't prove where it came from, or its evidence was changed.</li><li>It treats groups of people too differently.</li></ul><details><summary>Exact reason from the checker</summary><code>evaluation predictions missing or altered after training<br>no trustworthy evaluation predictions to measure</code></details>
+    </div></div>
+    <div><p class="scenario">The manager withdraws sign-off on the good AI.</p><div class="card">
+      <div class="cardhead"><div><b>Fair AI, approval withdrawn</b><small>income-fair · high risk</small></div><div class="verdict bad">✗ Blocked</div></div>
+      <div class="lights"><div class="light ok"><span>✓</span>How risky is it?</div><div class="light ok"><span>✓</span>Is the paperwork complete?</div><div class="light ok"><span>✓</span>Can we trace where it came from?</div><div class="light ok"><span>✓</span>Is it fair to every group?</div><div class="light bad"><span>✗</span>Did someone independent approve it?</div></div>
+      <ul class="why"><li>No independent person has signed it off.</li></ul><details><summary>Exact reason from the checker</summary><code>approval status is requested</code></details>
+    </div></div>
+  </div>
+  <p class="note">Why the first one fails: when the AI was trained, a fingerprint of its results was saved. Change even one character and the fingerprint no longer matches.</p>
+</section>
+
+<section>
+  <div class="step">Bank-sized volumes</div>
+  <h2>Checking 25 million applications</h2>
+  <p class="lead" style="margin-bottom:20px">A real bank scores millions of applications, so the fairness check runs on <b>Apache Spark</b>, which splits the work across many processor cores at once.</p>
+  <div class="srow"><div class="slabel">Normal way (1 core)</div><div class="sbar base" style="width:100.0%"><span>85 s</span></div></div><div class="srow"><div class="slabel">Spark, 1 core</div><div class="sbar fair" style="width:108.1%"><span>92 s</span></div></div><div class="srow"><div class="slabel">Spark, 2 cores</div><div class="sbar fair" style="width:55.5%"><span>47 s</span></div></div><div class="srow"><div class="slabel">Spark, 4 cores</div><div class="sbar fair" style="width:33.8%"><span>29 s</span></div></div><div class="srow"><div class="slabel">Spark, 8 cores</div><div class="sbar fair" style="width:23.1%"><span>20 s</span></div></div>
+  <p class="note">4.3× faster on 8 cores, and the fairness score came out identical at every size. The 25 million rows are the 195,665 census people copied with new IDs, which tests speed, not new findings.</p>
+</section>
+
+<section>
+  <div class="step">See it for real</div>
+  <h2>It runs on GitHub for every change</h2>
+  <p class="lead">One check per AI program: green means released, red means blocked, with the reason attached.</p>
+  <div class="links"><a href="https://github.com/dhanush-sr/ai-governance-registry/actions">GitHub checks →</a><a href="https://github.com/dhanush-sr/ai-governance-registry/blob/main/REGISTRY.md">Full registry report →</a><a href="https://github.com/dhanush-sr/ai-governance-registry">Code →</a></div>
+  <div class="files">
+    <b>The rule book</b><span><code>registry/policy.yaml</code></span>
+    <b>Info sheets</b><span><code>registry/models/*/card.yaml</code> · <code>registry/datasets/*.yaml</code></span>
+    <b>Fingerprints</b><span><code>registry/models/*/run.json</code></span>
+    <b>The checker</b><span><code>governance/gate.py</code> (5 checks) · <code>governance/risk.py</code> (EU law) · <code>governance/fairness.py</code> (Spark)</span>
+    <b>GitHub setup</b><span><code>.github/workflows/governance-gate.yml</code></span>
+  </div>
+</section>
+</body></html>
