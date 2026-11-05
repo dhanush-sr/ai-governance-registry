@@ -280,6 +280,53 @@ def run_gate(model_id, breaks):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+SECTIONS = {"limitations": "limitations", "users": "intended_use.users", "out_of_scope": "intended_use.out_of_scope",
+            "evaluation": "evaluation.description", "ethics": "ethical_considerations", "oversight": "human_oversight"}
+
+
+def custom(b):
+    """A judge's own AI: write a real card from the form into a throwaway registry and run the real checker."""
+    import yaml
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        shutil.copytree("registry", tmp / "registry")
+        base = "income-fair" if b.get("training") == "fair" else "income-baseline"  # reuse that model's real evidence
+        d = tmp / "registry/models/your-ai"
+        shutil.copytree(tmp / "registry/models" / base, d)
+        card = gate.load(d / "card.yaml")
+        name = (b.get("name") or "").strip()[:60] or "Your AI"
+        card.update(id="your-ai", name=name, owner="your-team@example.org")
+        card["risk"] = {"use_case": b.get("use_case", "other"), "interacts_with_people": bool(b.get("chats")),
+                        "generates_synthetic_content": False, "declared_tier": b.get("declared", "high")}
+        for key, path in SECTIONS.items():
+            if not b.get(key):
+                head, _, leaf = path.rpartition(".")
+                (gate.get(card, head) if head else card).pop(leaf, None)
+        if b.get("notice"):
+            card["transparency_notice"] = "Users are told they are talking to an AI system."
+        card["approval"] = {"none": {"status": "requested"},
+                            "self": {"status": "approved", "approver": card["owner"]},
+                            }.get(b.get("approval"), {"status": "approved", "approver": "ai-governance-board@example.org"})
+        (d / "card.yaml").write_text(yaml.safe_dump(card, sort_keys=False, allow_unicode=True))
+        if not b.get("privacy"):
+            ds = tmp / "registry/datasets/acs-income-ca-2018.yaml"
+            dc = gate.load(ds)
+            dc.pop("personal_data", None)
+            ds.write_text(yaml.safe_dump(dc, sort_keys=False))
+        with LOCK:
+            gate.REGISTRY = tmp / "registry"
+            datasets = {p.stem: gate.load(p) for p in (gate.REGISTRY / "datasets").glob("*.yaml")}
+            r = gate.check_model(d, POLICY, datasets, spark)
+            out = summarise(r)
+            out["rules"] = explain(r, gate.load(d / "card.yaml"), d, datasets)
+            gate.REGISTRY = Path("registry")
+        out["card"] = (d / "card.yaml").read_text()
+        return out
+    finally:
+        gate.REGISTRY = Path("registry")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def explain(r, card, d, datasets):
     """For each of the five questions: what the rule book asks, and what this AI has."""
     tier = r["tier"]
@@ -354,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         routes = {"/api/predict": lambda: predict(body), "/api/classify": lambda: classify_use(body),
-                  "/api/gate": lambda: run_gate(body["model"], body.get("breaks", []))}
+                  "/api/gate": lambda: run_gate(body["model"], body.get("breaks", [])), "/api/custom": lambda: custom(body)}
         if self.path in routes:
             self.send(routes[self.path]())
         else:
@@ -384,6 +431,13 @@ svg.i{width:1em;height:1em;flex:none;vertical-align:-.13em}
 .count{font-size:13px;color:var(--ink2);min-width:74px;text-align:right}
 main{min-height:100%;display:flex;justify-content:center;padding:120px 28px 140px}
 .step{width:100%;max-width:1000px;display:none}
+.build{display:grid;grid-template-columns:330px 1fr;gap:40px;margin-top:40px;align-items:start}
+.bform{display:grid;gap:12px}.bform label{display:grid;gap:5px;font-size:13px;color:var(--ink2)}
+.bform input:not([type=checkbox]),.bform select{font:inherit;font-size:16px;padding:9px 14px;border-radius:12px;border:1px solid #d2d2d7;width:100%}
+.bform label.cb{display:flex;gap:10px;align-items:center;font-size:15px;color:var(--ink)}.bform .cb input{width:18px;height:18px;accent-color:var(--blue)}
+.blabel{font-size:13px;color:var(--ink2);margin-top:6px}
+.rr.mini{grid-template-columns:1fr 120px}.rr.mini .has{display:block;font-size:14px;margin-top:2px}
+@media (max-width:760px){.build{grid-template-columns:1fr}}
 .rulelist{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
 .rulelist span{background:var(--fill);border-radius:980px;padding:9px 16px 9px 10px;font-size:16px;display:inline-flex;align-items:center;gap:10px}
 .rulelist b{width:24px;height:24px;border-radius:50%;background:#fff;display:grid;place-items:center;font-size:13px}
@@ -580,10 +634,28 @@ const STEPS = [
       `<button class="li btnrow" onclick="openCase('${id}')"><span style="color:${ok ? "var(--ok)" : "var(--bad)"}">${icon(ok ? "ok" : "no")}</span><div><div class="t">${a}</div><div class="s">${b}</div></div>${icon("chev", "i chev")}</button>`).join("")}
    </div>
    <details><summary>See every AI and dataset description (the registry)</summary><div id="reg"></div><div id="cardview"></div></details>
-   <details><summary>See the real rule book</summary><div class="detail-body" id="rules"></div></details></div>`, next: "Try the AI yourself",
+   <details><summary>See the real rule book</summary><div class="detail-body" id="rules"></div></details></div>`, next: "Build your own AI",
   run: async () => { const o = await overview(); $("#rules").innerHTML = rulesHTML(o.rules);
    const row = (t, s, file) => `<button class="li btnrow" onclick="card('${file}')"><div><div class="t">${t}</div><div class="s">${s}</div></div>${icon("chev", "i chev")}</button>`;
    $("#reg").innerHTML = `<div class="list">` + o.models.map(m => row(m.name, `${m.use_case} · ${TIER[m.tier]}`, m.file)).join("") + o.datasets.map(d => row(d.name, `${(d.rows || 0).toLocaleString()} rows · public data`, d.file)).join("") + `</div>`; }},
+ { // build your own
+  html: () => `<h1>Now build your own AI.</h1>
+   <p class="lede">Describe an AI the way a team would, and submit it. The <b>real checker</b> reads your card and decides, live. Change anything and it re-checks.</p>
+   <div class="build"><div class="bform">
+    <label>Name<input id="b_name" value="My AI"></label>
+    <label>What is it used for?<select id="b_use">${[["High risk", USES.high], ["Banned", USES.banned], ["Everything else", USES.other]].map(([g, x]) =>
+      `<optgroup label="${g}">${Object.entries(x).map(([k, v]) => `<option value="${k}"${k == "employment" ? " selected" : ""}>${v}</option>`).join("")}</optgroup>`).join("")}</select></label>
+    <label class="cb"><input type="checkbox" id="b_chats">It chats with people</label>
+    <label>Risk level the team writes on its card<select id="b_declared"><option value="high">High risk</option><option value="limited">Limited risk</option><option value="minimal">Low risk</option><option value="unacceptable">Banned</option></select></label>
+    <label>How was it trained?<select id="b_training"><option value="fair">Carefully, with a fairness rule</option><option value="quick">The quick way</option></select></label>
+    <div class="blabel">Sections in its description</div>
+    ${[["limitations", "Limitations"], ["users", "Who will use it"], ["out_of_scope", "What it must not be used for"], ["evaluation", "How it was tested"], ["ethics", "Ethical concerns"], ["oversight", "How humans oversee it"], ["notice", "“You are talking to an AI” notice"]].map(([k, l]) =>
+      `<label class="cb"><input type="checkbox" id="b_${k}" ${k != "notice" ? "checked" : ""}>${l}</label>`).join("")}
+    <label class="cb"><input type="checkbox" id="b_privacy" checked>Its data card has a privacy note</label>
+    <label>Approval<select id="b_approval"><option value="board">Approved by the governance board</option><option value="self">Approved by its own team</option><option value="none">Not approved yet</option></select></label>
+   </div><div id="bout">${wait("Checking…")}</div></div>`,
+  run: () => { let t; const go = () => { clearTimeout(t); t = setTimeout(submitOwn, 250); };
+   document.querySelectorAll(".bform input,.bform select").forEach(el => el.addEventListener(el.type == "text" ? "input" : "change", go)); submitOwn(); }},
  { // try
   html: () => `<h1>Try the loan AI yourself.</h1>
    <p class="lede">Describe a person and see what both loan AIs guess. They are never told race or sex.</p>
@@ -598,6 +670,20 @@ const STEPS = [
    $("#real").onclick = async () => { const p = await J("/api/sample"); F.forEach(([k]) => $("#" + k).value = p[k]); ask(p); }; }},
 ];
 
+let ownLast = null;
+async function submitOwn() {
+  const v = id => $("#b_" + id), body = {name: v("name").value, use_case: v("use").value, chats: v("chats").checked, declared: v("declared").value,
+    training: v("training").value, approval: v("approval").value, privacy: v("privacy").checked};
+  ["limitations", "users", "out_of_scope", "evaluation", "ethics", "oversight", "notice"].forEach(k => body[k] = v(k).checked);
+  $("#bout").style.opacity = .45; const r = await J("/api/custom", body); $("#bout").style.opacity = 1;
+  const flipped = g => ownLast && ownLast.status[g] != r.status[g];
+  const mark = s => s == "pass" ? `<span class="res ok">${icon("ok")}Yes</span>` : s == "fail" ? `<span class="res bad">${icon("no")}No</span>` : `<span class="res na">${icon("na")}Not needed</span>`;
+  $("#bout").innerHTML = `<div class="verdict ${r.ok ? "ok" : "bad"}" style="margin-top:0">${icon(r.ok ? "ok" : "no")} ${r.ok ? "Released" : "Blocked"}</div>
+    <p class="because">${esc(body.name || "Your AI")} is <b>${TIER[r.tier] || r.tier}</b>. ${r.ok ? "Every rule that applies is met." : r.why.join(" ")}</p>
+    <div class="rt" style="margin-top:20px">${RULES.map(([g, q]) => `<div class="rr mini ${r.status[g] == "n/a" ? "na" : r.status[g]} ${flipped(g) ? "flip" : ""}"><div><b>${q}</b><span class="has">${r.rules[g].has}</span></div>${mark(r.status[g])}</div>`).join("")}</div>
+    <details><summary>See the card you just wrote</summary><pre>${esc(r.card)}</pre></details>`;
+  ownLast = r;
+}
 window.openCase = id => { model = id; applied = null; last = null; loaded.delete(2); go(2); };
 
 function renderCase() {
