@@ -12,10 +12,10 @@ body { font: 10pt/1.42 "Charter", "Georgia", serif; color: #000; text-align: lef
 a { color: #000; } h1, h2, h3 { color: #000; text-align: left; }
 h1 { font-size: 17pt; margin: 0 0 2pt; } h2 { font-size: 12.5pt; margin: 13pt 0 4pt; }
 h3 { font-size: 10.5pt; margin: 9pt 0 3pt; }
-code { font-size: 8.6pt; }
+code, pre { font: inherit; }
 table { border-collapse: collapse; margin: 6pt 0; font-size: 8.8pt; width: 100%; }
-th, td { border-bottom: 1px solid #000; padding: 2.5pt 5pt; text-align: left; vertical-align: top; }
-th { border-bottom: 1.5px solid #000; }
+th, td { border: 1px solid #000; padding: 2.5pt 5pt; text-align: left; vertical-align: top; }
+th { font-weight: bold; }
 img { width: 100%; margin: 4pt 0; } .byline { color: #000; margin-bottom: 10pt; }
 """
 CHROME = next(p for p in ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
