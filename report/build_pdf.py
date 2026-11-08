@@ -8,7 +8,7 @@ import markdown
 HERE = Path(__file__).parent
 CSS = """
 @page { size: A4; margin: 16mm 17mm; }
-body { font: 10pt/1.42 "Charter", "Georgia", serif; color: #000; text-align: left; }
+body { font: 11pt/1.4 "Times New Roman", Times, serif; color: #000; text-align: left; }
 a { color: #000; } h1, h2, h3 { color: #000; text-align: left; }
 h1 { font-size: 17pt; margin: 0 0 2pt; } h2 { font-size: 12.5pt; margin: 13pt 0 4pt; }
 h3 { font-size: 10.5pt; margin: 9pt 0 3pt; }
