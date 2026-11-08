@@ -1,8 +1,8 @@
 # AI Governance Registry with Deployment Gates
 
-A registry of model and dataset cards in which every model gets an **EU AI Act risk tier** and must pass
-**CI deployment gates** for documentation, lineage, fairness and approval before it is released.
-The fairness gate is a **Spark job**, and the same code is benchmarked at up to 25 M rows.
+A registry of model and dataset cards. Every model gets an EU AI Act risk tier and must pass CI
+deployment gates for documentation, lineage, fairness and approval before it is released. The fairness
+gate is a Spark job, and we benchmarked the same code at up to 25 M rows.
 
 | Deliverable | Where |
 |---|---|
@@ -12,7 +12,6 @@ The fairness gate is a **Spark job**, and the same code is benchmarked at up to 
 | Reproducible pipeline | [`Makefile`](Makefile), [`pipeline/`](pipeline/) |
 | Results notebook | [`notebooks/results.ipynb`](notebooks/results.ipynb) |
 | Technical report | [`report/report.pdf`](report/report.pdf) (source: [`report/report.md`](report/report.md)) |
-| Demo video | [`demo/demo.mp4`](demo/demo.mp4): the live demo app checking Case 2 against the rule book, catching two cheats, and GitHub not releasing it |
 | Model card / data card | [`registry/models/income-fair/card.yaml`](registry/models/income-fair/card.yaml), [`registry/datasets/acs-income-ca-2018.yaml`](registry/datasets/acs-income-ca-2018.yaml) |
 
 ## Architecture
@@ -52,39 +51,41 @@ flowchart LR
   A -->|any fail| BLK["Blocked: PR check fails"]
 ```
 
-How the gates work:
+Each gate blocks a model in these cases:
 
 | Gate | Blocks when | Applies to |
 |---|---|---|
-| **risk** | The tier computed from `risk.use_case` (Art. 5 / Annex III / Art. 50) differs from `declared_tier`, or the tier is `unacceptable` | all |
-| **documentation** | The card fails its JSON Schema, or a field required for its tier is missing | all (more fields for high risk) |
-| **lineage** | No `run.json`; the training commit is missing from git or the tree was dirty; a training dataset is unregistered, or its sha256 differs from its card; the evaluation evidence was altered after training | all |
-| **fairness** | Recomputed with Spark from the evidence file: disparate impact < 0.8, or TPR gap > 0.1, on any sensitive attribute | high risk |
-| **approval** | Not `approved`, or the approver is the owner | high risk |
+| risk | The tier computed from `risk.use_case` (Art. 5 / Annex III / Art. 50) differs from `declared_tier`, or the tier is `unacceptable` | all |
+| documentation | The card fails its JSON Schema, or a field required for its tier is missing | all (more fields for high risk) |
+| lineage | No `run.json`; the training commit is missing from git or the tree was dirty; a training dataset is unregistered, or its sha256 differs from its card; the evaluation evidence was altered after training | all |
+| fairness | Recomputed with Spark from the evidence file: disparate impact < 0.8, or TPR gap > 0.1, on any sensitive attribute | high risk |
+| approval | Not `approved`, or the approver is the owner | high risk |
 
 ## Results
 
 | Model | Tier | Gate decision | Why |
 |---|---|---|---|
-| `income-fair` | high (Annex III 5(b), credit) | ✅ **DEPLOY** | Accuracy 0.747; race disparate impact 0.885; sex disparate impact 0.977 |
-| `income-baseline` | high (Annex III 5(b), credit) | ❌ **BLOCKED** (fairness) | Accuracy 0.825, but race disparate impact 0.299 and TPR gap 0.331, even though SEX and race are not inputs and a human approved it |
-| `taxi-eta` | minimal | ❌ **BLOCKED** (documentation, lineage) | No `limitations` (an unofficial `known_issues` field instead); its training dataset's card has no privacy (`personal_data`) statement yet |
+| `income-fair` | high (Annex III 5(b), credit) | ✅ DEPLOY | Accuracy 0.747; race disparate impact 0.885; sex disparate impact 0.977 |
+| `income-baseline` | high (Annex III 5(b), credit) | ❌ BLOCKED (fairness) | Accuracy 0.825, but race disparate impact 0.299 and TPR gap 0.331, even though SEX and race are not inputs and a human approved it |
+| `taxi-eta` | minimal | ❌ BLOCKED (documentation, lineage) | No `limitations` (an unofficial `known_issues` field instead); its training dataset's card has no privacy (`personal_data`) statement yet |
 
-The full report is in [`REGISTRY.md`](REGISTRY.md).
+[`REGISTRY.md`](REGISTRY.md) has the full gate report.
 
-**Scaling of the fairness audit** (`make benchmark`, M4 laptop, 25 M rows, identical results on every engine):
+Scaling of the fairness audit (`make benchmark`, M4 laptop, 25 M rows; every engine gives the same result):
 
 | | pandas (1 process) | Spark, 1 core | Spark, 2 cores | Spark, 4 cores | Spark, 8 cores |
 |---|---|---|---|---|---|
-| Seconds | 85.1 | 92.0 | 47.2 | 28.8 | **19.7** |
-| Speed-up vs pandas | 1× | 0.9× | 1.8× | 3.0× | **4.3×** |
+| Seconds | 85.1 | 92.0 | 47.2 | 28.8 | 19.7 |
+| Speed-up vs pandas | 1× | 0.9× | 1.8× | 3.0× | 4.3× |
 
 ![scaling](results/fig_scaling.png)
 
-The CI gate itself takes 4.6–6.2 s per high-risk model, Spark start-up included.
+In CI the gate takes 4.6 to 6.2 s per high-risk model, including Spark start-up.
 
-> **The CI workflow is red on purpose.** Two of the three example models exist to be blocked. Each model has its own
-> check, `gate (<model>)`: `gate (income-fair)` is green, and the other two fail with their reasons in the job summary.
+> The CI workflow is red on purpose, because two of the three example models exist to be blocked. Each model has its
+> own check, `gate (<model>)`. `gate (income-fair)` is green, and the other two fail with their reasons in the job
+> summary. Branch protection on `main` requires `tests` and `gate (income-fair)`, so a pull request that breaks the
+> deployed model cannot be merged.
 
 ## Setup
 
@@ -103,20 +104,18 @@ make report      # report/report.md -> report/report.pdf (needs Google Chrome)
 
 To gate a single model: `uv run python -m governance.gate income-fair`.
 
-**Live demo app:** `uv run python -m demo.app` opens a local web page where you can try the loan AI on an applicant, run the fairness audit, submit models to the checkpoint (and break them to see them get blocked), and run the 1.6 M-row Spark audit. It needs `make data train benchmark` to have been run first.
+`uv run python -m demo.app` starts the live demo app in the browser. It walks through the three models against the rule book, lets you change a model (edit its results, withdraw approval, delete a section) and watch the gate block it, shows the matching blocked pull request on GitHub, runs the Spark audit on 1.6 M rows, and lets you describe your own model and run the gate on it. Run `make data train benchmark` first. Set `SPARK_UI=true` to watch the Spark jobs at http://localhost:4040.
 
-**To register a new model:**
+To register a new model:
 1. Add `registry/models/<id>/card.yaml`.
 2. Add a dataset card for each new dataset in `registry/datasets/`.
 3. Have the training pipeline write `run.json` and `eval_predictions.parquet`.
-4. Open a PR; CI picks the model up automatically.
+4. Open a pull request. CI picks up the new model automatically.
 
-To make the gates actually block merges, mark the `gate (…)` checks as *required* under the repository's branch protection settings.
+To make a model's gate block merges, add its `gate (<model>)` check to the required checks in the branch protection settings.
 
 ## Data and ethics
 
-Only public data is used:
-- **ACS PUMS:** US Census Bureau, public domain. De-identified microdata, used through the Folktables ACSIncome task.
-- **NYC TLC trip records:** NYC open data.
-
-No attempt is made to re-identify anyone. All owner and approver identities are fictional (`@example.org`).
+All data is public. ACS PUMS is de-identified, public-domain microdata from the US Census Bureau, used through the
+Folktables ACSIncome task. The NYC TLC trip records are NYC open data. We made no attempt to re-identify anyone, and
+all owner and approver identities are fictional (`@example.org`).
