@@ -14,6 +14,7 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import json
 import pickle
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -30,7 +31,8 @@ from governance.fairness import metrics, spark
 from governance.risk import HIGH_RISK, PROHIBITED, classify
 
 REPO = "dhanush-sr/ai-governance-registry"
-DEMO_BRANCH = "demo/break-fair-model"
+DEMO_BRANCHES = {"delete_limitations": "demo/break-fair-model", "edit_results": "demo/edit-fair-results",
+                 "withdraw_approval": "demo/withdraw-approval", "claim_minimal": "demo/claim-low-risk"}  # one real PR per change
 REQUIRED_CHECKS = ["tests", "gate (income-fair)"]  # as set in branch protection
 BLIND = ["AGEP", "COW", "SCHL", "MAR", "OCCP", "POBP", "RELP", "WKHP"]
 RACE = {1: "White", 2: "Black", 3: "American Indian", 4: "Alaska Native", 5: "Native tribe (other)", 6: "Asian",
@@ -50,10 +52,10 @@ CHOICES = {
     "RELP": {0: "Head of household", 1: "Spouse", 13: "Unmarried partner", 2: "Child"},
 }
 PLAIN = {"risk": "Its risk level is wrong, or it is banned.",
-         "documentation": "Its paperwork is incomplete.",
-         "lineage": "We can't prove where it came from, or its evidence was changed.",
+         "documentation": "Its description is incomplete.",
+         "lineage": "We can't trust where it came from: something is missing or was changed.",
          "fairness": "It treats groups of people too differently.",
-         "approval": "No independent person has signed it off."}
+         "approval": "Nobody else has approved it."}
 FIELD = {"name": "Name", "owner": "Owner", "version": "Version", "description": "What it does",
          "intended_use.primary_use": "Main use", "risk.declared_tier": "Declared risk level",
          "limitations": "Limitations", "intended_use.users": "Who will use it",
@@ -92,7 +94,8 @@ def plain_basis(tier, basis):
 def summarise(r, secs=0.0):
     return {"id": r["id"], "name": ABOUT.get(r["id"], r["id"]), "tier": r["tier"], "basis": plain_basis(r["tier"], r["basis"]),
             "ok": r["deployable"], "status": r["status"], "seconds": secs,
-            "why": [PLAIN[g] for g in gate.GATES if r["status"][g] == "fail"],
+            "why": [("Its fairness can't be measured from changed evidence." if g == "fairness" and any("no trustworthy" in m for m in r["fails"][g])
+                     else PLAIN[g]) for g in gate.GATES if r["status"][g] == "fail"],
             "detail": [m.replace("`", "") for g in gate.GATES for m in r["fails"][g]],
             "fairness": {a: {"di": v["disparate_impact"], "gap": v["equal_opportunity_diff"]} for a, v in r["fairness"].items()}}
 
@@ -130,9 +133,36 @@ def classify_use(body):
             "fairness": bool(r.get("fairness")), "approval": bool(r.get("approval_required"))}
 
 
+_gh = {"t": 0, "data": None}
+
+
+def _gh_headers():
+    """Use the local `gh` login when there is one: 5,000 requests/hour instead of 60 for anonymous use."""
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token and shutil.which("gh"):
+        token = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True).stdout.strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+GH_HEADERS = _gh_headers()
+
+
 def github():
+    """Live check results from GitHub, remembered for a minute so the demo doesn't wait on the network."""
+    if _gh["data"] and time.time() - _gh["t"] < 60:
+        return _gh["data"]
+    data = _github()
+    if "error" not in data:
+        _gh.update(t=time.time(), data=data)
+    return data
+
+
+def _github():
     def get(path):
-        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}", headers={"Accept": "application/vnd.github+json"})
+        req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/{path}", headers=GH_HEADERS)
         with urllib.request.urlopen(req, timeout=8) as f:
             return json.load(f)
 
@@ -141,12 +171,11 @@ def github():
         return sorted(({"name": c["name"], "status": c["status"], "conclusion": c["conclusion"], "url": c["html_url"]} for c in runs),
                       key=lambda c: c["name"])
     try:
-        prs = get(f"pulls?state=all&head={REPO.split('/')[0]}:{DEMO_BRANCH}")
-        pr = prs[0] if prs else None
-        out = {"repo": REPO, "required": REQUIRED_CHECKS, "main": checks("main")}
-        if pr:
-            out["pr"] = {"number": pr["number"], "title": pr["title"], "url": pr["html_url"], "state": pr["state"],
-                         "checks": checks(pr["head"]["sha"])}
+        out = {"repo": REPO, "required": REQUIRED_CHECKS, "main": checks("main"), "prs": {}}
+        for pr in get("pulls?state=open&per_page=50"):
+            if pr["head"]["ref"] in DEMO_BRANCHES.values():
+                out["prs"][pr["head"]["ref"]] = {"number": pr["number"], "title": pr["title"], "url": pr["html_url"],
+                                                  "checks": checks(pr["head"]["sha"])}
         return out
     except Exception as e:  # offline: the UI falls back to links
         return {"error": str(e), "repo": REPO}
@@ -188,18 +217,31 @@ def audit():
     return out
 
 
+TIER_PLAIN = {"unacceptable": "banned", "high": "high risk", "limited": "limited risk", "minimal": "low risk"}
+
+
+def first_line(text, n=70):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= n else text[:n].rsplit(" ", 1)[0] + "…"
+
+
 def run_gate(model_id, breaks):
+    """Apply the chosen changes to a throwaway copy, run the real checker, and explain each rule."""
     tmp = Path(tempfile.mkdtemp())
     try:
         shutil.copytree("registry", tmp / "registry")
         d = tmp / "registry/models" / model_id
         card = d / "card.yaml"
+        before = gate.load(card)
+        changes = []
         if "edit_results" in breaks:
             e = pd.read_parquet(d / "eval_predictions.parquet")
             e["y_pred"] = e["y_true"]
             e.to_parquet(d / "eval_predictions.parquet")
+            changes.append(["Its saved test results", "the AI's real answers", "replaced with perfect answers"])
         if "withdraw_approval" in breaks:
             card.write_text(card.read_text().replace("status: approved", "status: requested"))
+            changes.append(["Approval", "approved", "requested (not approved yet)"])
         if "delete_limitations" in breaks:
             lines, skip = [], False
             for line in card.read_text().splitlines():
@@ -211,8 +253,18 @@ def run_gate(model_id, breaks):
                 skip = False
                 lines.append(line)
             card.write_text("\n".join(lines) + "\n")
+            changes.append(["Limitations section", first_line(before.get("limitations"), 60), "deleted"])
         if "claim_minimal" in breaks:
             card.write_text(card.read_text().replace("declared_tier: high", "declared_tier: minimal"))
+            changes.append(["Risk level written on its card", "high", "minimal (low risk)"])
+        if "fix_paperwork" in breaks:
+            card.write_text(card.read_text().replace(
+                "known_issues: Slow at airports, probably fine elsewhere.",
+                "limitations: >\n  Less accurate for airport trips and rush hour; trained on January 2023 only."))
+            ds = tmp / "registry/datasets/nyc-tlc-yellow-2023-01.yaml"
+            ds.write_text(ds.read_text().replace("# personal_data:", "personal_data: >\n  Trip records only; no names or rider identities. Published by NYC.\n# was:"))
+            changes.append(["Limitations section", "missing (an unofficial 'known issues' note)", "added"])
+            changes.append(["Privacy note on its data card", "missing", "added"])
         with LOCK:
             gate.REGISTRY = tmp / "registry"
             datasets = {p.stem: gate.load(p) for p in (gate.REGISTRY / "datasets").glob("*.yaml")}
@@ -220,9 +272,97 @@ def run_gate(model_id, breaks):
             r = gate.check_model(d, POLICY, datasets, spark)
             secs = time.perf_counter() - t
             gate.REGISTRY = Path("registry")
-        return summarise(r, secs)
+        out = summarise(r, secs)
+        out["changes"] = changes
+        out["rules"] = explain(r, gate.load(card), d, datasets)
+        return out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+SECTIONS = {"limitations": "limitations", "users": "intended_use.users", "out_of_scope": "intended_use.out_of_scope",
+            "evaluation": "evaluation.description", "ethics": "ethical_considerations", "oversight": "human_oversight"}
+
+
+def custom(b):
+    """A judge's own AI: write a real card from the form into a throwaway registry and run the real checker."""
+    import yaml
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        shutil.copytree("registry", tmp / "registry")
+        base = "income-fair" if b.get("training") == "fair" else "income-baseline"  # reuse that model's real evidence
+        d = tmp / "registry/models/your-ai"
+        shutil.copytree(tmp / "registry/models" / base, d)
+        card = gate.load(d / "card.yaml")
+        name = (b.get("name") or "").strip()[:60] or "Your AI"
+        card.update(id="your-ai", name=name, owner="your-team@example.org")
+        card["risk"] = {"use_case": b.get("use_case", "other"), "interacts_with_people": bool(b.get("chats")),
+                        "generates_synthetic_content": False, "declared_tier": b.get("declared", "high")}
+        for key, path in SECTIONS.items():
+            if not b.get(key):
+                head, _, leaf = path.rpartition(".")
+                (gate.get(card, head) if head else card).pop(leaf, None)
+        if b.get("notice"):
+            card["transparency_notice"] = "Users are told they are talking to an AI system."
+        card["approval"] = {"none": {"status": "requested"},
+                            "self": {"status": "approved", "approver": card["owner"]},
+                            }.get(b.get("approval"), {"status": "approved", "approver": "ai-governance-board@example.org"})
+        (d / "card.yaml").write_text(yaml.safe_dump(card, sort_keys=False, allow_unicode=True))
+        if not b.get("privacy"):
+            ds = tmp / "registry/datasets/acs-income-ca-2018.yaml"
+            dc = gate.load(ds)
+            dc.pop("personal_data", None)
+            ds.write_text(yaml.safe_dump(dc, sort_keys=False))
+        with LOCK:
+            gate.REGISTRY = tmp / "registry"
+            datasets = {p.stem: gate.load(p) for p in (gate.REGISTRY / "datasets").glob("*.yaml")}
+            r = gate.check_model(d, POLICY, datasets, spark)
+            out = summarise(r)
+            out["rules"] = explain(r, gate.load(d / "card.yaml"), d, datasets)
+            gate.REGISTRY = Path("registry")
+        out["card"] = (d / "card.yaml").read_text()
+        return out
+    finally:
+        gate.REGISTRY = Path("registry")
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def explain(r, card, d, datasets):
+    """For each of the five questions: what the rule book asks, and what this AI has."""
+    tier = r["tier"]
+    rules = POLICY["tiers"].get(tier, {})
+    need = POLICY["required_fields"] + rules.get("required_fields", [])
+    missing = [FIELD.get(f, f) for f in need if gate.get(card, f) in (None, "", [], {})]
+    unofficial = [k for k in card if k not in json.loads(Path("registry/schemas/model_card.schema.json").read_text())["properties"]]
+    run = json.loads((d / "run.json").read_text())
+    saved = run["evaluation"]["sha256"]
+    now = gate.sha256(d / run["evaluation"]["predictions"])
+    ds_problems = []
+    for t in run["training_data"]:
+        ds = datasets.get(t["id"])
+        if ds is None:
+            ds_problems.append("its data has no card")
+        else:
+            ds_problems += [f"its data card has no {FIELD.get(f, f).lower()}" for f in POLICY["dataset_required_fields"] if gate.get(ds, f) in (None, "", [], {})]
+    fair = r["fairness"].get("RAC1P")
+    appr = card.get("approval") or {}
+    use = USE_LABEL.get(gate.get(card, "risk.use_case"), gate.get(card, "risk.use_case"))
+    return {
+        "risk": {"asks": f"Used for {use.lower()}, so the EU AI Act says: {TIER_PLAIN.get(tier, tier)}. The card must say the same.",
+                 "has": f"Its card says: {TIER_PLAIN.get(gate.get(card, 'risk.declared_tier'), gate.get(card, 'risk.declared_tier'))}"},
+        "documentation": {"asks": f"{len(need)} sections filled in, including limitations" + (" and human oversight" if tier == "high" else ""),
+                          "has": ("Missing: " + ", ".join(missing) if missing else f"All {len(need)} filled in")
+                                 + (f". Unofficial section: {', '.join(unofficial)}" if unofficial else "")},
+        "lineage": {"asks": "Test results unchanged since it was built (same fingerprint), and a complete card for its data",
+                    "has": (f"Fingerprint {saved[:8]}… then, {now[:8]}… now" + (": changed" if now != saved else ": same"))
+                           + ("; " + "; ".join(ds_problems) if ds_problems else "; data card complete")},
+        "fairness": {"asks": "Least-approved group gets at least 80% of the best-approved group's rate (0.80)",
+                     "has": f"Measured: {fair['disparate_impact']:.2f}" if fair else
+                            ("Can't be measured: the results were changed" if r["status"]["fairness"] == "fail" else "Not needed at low risk")},
+        "approval": {"asks": "Approved by someone who didn't build it",
+                     "has": (f"{appr.get('status', 'no approval')} by {str(appr.get('approver', 'nobody')).split('@')[0]} (built by {str(card.get('owner')).split('@')[0]})"
+                             if rules.get("approval_required") else "Not needed at low risk")},
+    }
 
 
 def scale():
@@ -248,7 +388,7 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         routes = {"/api/overview": overview, "/api/sample": sample, "/api/audit": audit, "/api/scale": scale, "/api/github": github}
         if path == "/":
-            self.send(PAGE.replace("__CHOICES__", json.dumps(CHOICES)).replace("__USES__", json.dumps(
+            self.send(PAGE.replace("__CHOICES__", json.dumps(CHOICES)).replace("__DEMO__", json.dumps(DEMO_BRANCHES)).replace("__USES__", json.dumps(
                 {"high": {k: USE_LABEL[k] for k in HIGH_RISK}, "banned": {k: USE_LABEL[k] for k in PROHIBITED},
                  "other": {"other": USE_LABEL["other"]}})), "text/html; charset=utf-8")
         elif path == "/api/file" and query.removeprefix("p=") in CARD_FILES:
@@ -261,211 +401,389 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         routes = {"/api/predict": lambda: predict(body), "/api/classify": lambda: classify_use(body),
-                  "/api/gate": lambda: run_gate(body["model"], body.get("breaks", []))}
+                  "/api/gate": lambda: run_gate(body["model"], body.get("breaks", [])), "/api/custom": lambda: custom(body)}
         if self.path in routes:
             self.send(routes[self.path]())
         else:
             self.send_error(404)
 
 
-PAGE = r"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>AI Governance Registry: live demo</title><style>
-:root{--ink:#0b0b0b;--muted:#52514e;--line:#e2e1dc;--bg:#f6f5f2;--base:#eb6834;--fair:#2a78d6;--ok:#0a7d0a;--bad:#c62f2f}
-*{box-sizing:border-box;margin:0}body{font:17px/1.5 -apple-system,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:var(--bg)}
-header{background:white;border-bottom:1px solid var(--line);padding:14px 36px;display:flex;align-items:center;gap:28px;position:sticky;top:0;z-index:2}
-header h1{font-size:19px;white-space:nowrap}nav{display:flex;gap:4px;flex-wrap:wrap}nav button{border:0;background:none;font:inherit;font-size:15px;padding:9px 13px;border-radius:10px;cursor:pointer;color:var(--muted)}
-nav button.on{background:var(--ink);color:white}main{padding:28px 36px;max-width:1440px}.tab{display:none}.tab.on{display:block}
-h2{font-size:30px;margin-bottom:6px}h3{font-size:19px;margin:22px 0 10px}.sub{color:var(--muted);margin-bottom:22px;max-width:80ch}
-.panel{background:white;border:1px solid var(--line);border-radius:16px;padding:22px}.grid{display:grid;grid-template-columns:420px 1fr;gap:24px;align-items:start}
-label{display:block;font-size:14px;color:var(--muted);margin:12px 0 4px}select,input{width:100%;font:inherit;padding:9px 12px;border:1px solid #cfcec8;border-radius:10px;background:white}
-.btn{border:0;font:inherit;font-weight:600;padding:11px 18px;border-radius:12px;cursor:pointer;background:var(--ink);color:white;margin:14px 8px 0 0;text-decoration:none;display:inline-block}
-.btn.light{background:#ecebe6;color:var(--ink)}.btn:disabled{opacity:.5;cursor:wait}.yes{color:var(--ok)}.no{color:var(--bad)}.note{color:var(--muted);font-size:14px;margin-top:12px}
-table{border-collapse:collapse;width:100%;background:white;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top;font-size:15px}th{background:#faf9f7;color:var(--muted);font-weight:600}
-tr.click{cursor:pointer}tr.click:hover{background:#f7f6f3}.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:700;font-size:13px;white-space:nowrap}
-.pill.ok{background:#e3f4e3;color:var(--ok)}.pill.bad{background:#fbe4e4;color:var(--bad)}.pill.tier{background:#e8f0fb;color:#1c5cab}.pill.ban{background:#2b2a28;color:white}
-pre{background:#161615;color:#f0efec;border-radius:12px;padding:18px;font-size:13px;white-space:pre-wrap;max-height:520px;overflow:auto}
-.brief{font-size:24px;line-height:1.4;background:white;border-left:6px solid var(--fair);padding:20px 26px;border-radius:0 14px 14px 0;margin-bottom:24px;max-width:1100px}
-.check-row{display:grid;grid-template-columns:44px 1fr 1.3fr 150px;gap:16px;align-items:center;background:white;border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:8px 0}
-.tick{width:36px;height:36px;border-radius:50%;background:#e3f4e3;color:var(--ok);display:grid;place-items:center;font-weight:800;font-size:19px}
-.check-row b{font-size:17px}.check-row span{color:var(--muted);font-size:15px}.check-row .btn{margin:0;padding:8px 14px;font-size:14px;text-align:center}
-.flow{display:flex;gap:10px;align-items:center;margin:4px 0 22px;flex-wrap:wrap}.fbox{background:white;border:2px solid var(--line);border-radius:12px;padding:10px 14px;font-size:15px}.arrow{color:var(--muted);font-size:22px}
-.chain{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:17px}.chain .step{background:white;border:1px solid var(--line);border-radius:12px;padding:10px 14px}.chain small{display:block;color:var(--muted);font-size:12px}
-.tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.tierbox{background:white;border:1px solid var(--line);border-radius:14px;padding:16px;font-size:14px}.tierbox b{font-size:17px;display:block;margin-bottom:6px}.tierbox ul{padding-left:18px}
-.lights div{display:flex;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:800;flex:none}
-.pass .dot{background:#e3f4e3;color:var(--ok)}.fail .dot{background:#fbe4e4;color:var(--bad)}.fail{font-weight:600}.na .dot{background:#efeeea;color:#8a8984}.na{color:#8a8984}
-.decision{font-size:38px;font-weight:800;margin:4px 0 10px}.why{color:var(--bad);padding-left:20px;margin-top:10px}code{font-size:12px;color:var(--muted);display:block;margin-top:10px;white-space:pre-wrap}
-.models{display:flex;gap:10px;flex-wrap:wrap}.chip{border:2px solid var(--line);background:white;border-radius:12px;padding:10px 14px;cursor:pointer;font:inherit;text-align:left}.chip.on{border-color:var(--ink)}.chip small{display:block;color:var(--muted);font-size:13px}
-.breaks label{display:flex;gap:10px;align-items:center;color:var(--ink);font-size:16px;margin:8px 0}.breaks input{width:auto}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:16px 0}.stat{background:white;border:1px solid var(--line);border-radius:14px;padding:16px}.stat b{display:block;font-size:30px}.stat small{color:var(--muted)}
-.grp{display:grid;grid-template-columns:190px 1fr;gap:14px;align-items:center;margin:5px 0}.gname{text-align:right;font-size:15px}
-.b{height:18px;border-radius:0 4px 4px 0;position:relative}.b span{position:absolute;left:calc(100% + 6px);top:-2px;font-size:13px;white-space:nowrap}
-.answers{display:grid;grid-template-columns:1fr 1fr;gap:16px}.ans{border-radius:16px;padding:20px;background:white;border:2px solid var(--line)}.ans h3{font-size:15px;color:var(--muted);margin:0}
-.verdict{font-size:30px;font-weight:800;margin:6px 0}.meter{height:12px;border-radius:6px;background:#ecebe6;overflow:hidden;margin-top:8px}.meter i{display:block;height:100%}
-.truth{margin-top:16px;padding:14px 18px;border-radius:14px;background:#fffbe9;border:1px solid #f2e3a3}
-.gh{display:grid;grid-template-columns:1fr 1fr;gap:20px}.ghcheck{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
-.banner{border-radius:14px;padding:16px 20px;font-size:19px;font-weight:700;margin:12px 0}.banner.bad{background:#fbe4e4;color:var(--bad)}.banner.ok{background:#e3f4e3;color:var(--ok)}
-.spin{display:inline-block;width:18px;height:18px;border:3px solid #ccc;border-top-color:var(--ink);border-radius:50%;animation:s .8s linear infinite;vertical-align:-3px;margin-right:8px}@keyframes s{to{transform:rotate(360deg)}}
-.legend span{margin-right:20px;font-size:14px}.sw{display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:-2px;margin-right:6px}
+PAGE = r"""<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Governance Registry</title><style>
+:root{--ink:#1d1d1f;--ink2:#6e6e73;--ink3:#86868b;--line:#e5e5ea;--fill:#f5f5f7;--blue:#0071e3;--blue-h:#0077ed;--ok:#1f7a35;--bad:#c4131f;--okbg:#eaf6ec;--badbg:#fdeceb;--first:#eb6834;--fair:#2a78d6;
+--ease:cubic-bezier(.16,1,.3,1);font-synthesis:none}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Arial,sans-serif;color:var(--ink);background:#fff;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+::selection{background:#cfe4fb}
+:focus-visible{outline:3px solid rgba(0,113,227,.45);outline-offset:3px;border-radius:8px}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+a{color:var(--blue);text-decoration:none}a:hover{text-decoration:underline;text-underline-offset:3px}
+svg.i{width:1em;height:1em;flex:none;vertical-align:-.13em}
+
+/* frame */
+.top{position:fixed;inset:0 0 auto;height:56px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:rgba(255,255,255,.86);backdrop-filter:saturate(180%) blur(16px);z-index:5}
+.brand{font-weight:600;font-size:15px}
+.dots{display:flex;gap:6px;align-items:center}
+.dot{width:8px;height:8px;border-radius:50%;background:#d2d2d7;transition:background .3s}
+.dot.done{background:#8e8e93}.dot.on{width:22px;border-radius:4px;background:var(--ink)}
+.dots button{padding:6px 2px;display:grid;place-items:center}
+.count{font-size:13px;color:var(--ink2);min-width:74px;text-align:right}
+main{min-height:100%;display:flex;justify-content:center;padding:120px 28px 140px}
+.step{width:100%;max-width:1000px;display:none}
+.build{display:grid;grid-template-columns:330px 1fr;gap:40px;margin-top:40px;align-items:start}
+.bform{display:grid;gap:12px}.bform label{display:grid;gap:5px;font-size:13px;color:var(--ink2)}
+.bform input:not([type=checkbox]),.bform select{font:inherit;font-size:16px;padding:9px 14px;border-radius:12px;border:1px solid #d2d2d7;width:100%}
+.bform label.cb{display:flex;gap:10px;align-items:center;font-size:15px;color:var(--ink)}.bform .cb input{width:18px;height:18px;accent-color:var(--blue)}
+.blabel{font-size:13px;color:var(--ink2);margin-top:6px}
+.rr.mini{grid-template-columns:1fr 120px}.rr.mini .has{display:block;font-size:14px;margin-top:2px}
+@media (max-width:760px){.build{grid-template-columns:1fr}}
+.rulelist{display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.rulelist span{background:var(--fill);border-radius:980px;padding:9px 16px 9px 10px;font-size:16px;display:inline-flex;align-items:center;gap:10px}
+.rulelist b{width:24px;height:24px;border-radius:50%;background:#fff;display:grid;place-items:center;font-size:13px}
+.pick{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:44px}
+.choice{display:flex;flex-direction:column;gap:6px;text-align:left;padding:24px;border-radius:20px;background:var(--fill);transition:background .2s,transform .2s var(--ease)}
+.choice:hover{background:#ebebf0;transform:translateY(-2px)}
+.choice .cn{font-size:13px;color:var(--ink2)}.choice b{font-size:22px;letter-spacing:-.01em}.choice span{color:var(--ink2);font-size:15px}
+.choice .go{margin-top:14px;color:var(--blue);font-size:15px;display:inline-flex;align-items:center;gap:4px}
+h1.caseh{max-width:none}
+.casebody{margin:36px auto 0}
+.rt{border-top:1px solid var(--line)}
+.rh,.rr{display:grid;grid-template-columns:1.05fr 1.35fr 1.35fr 128px;gap:18px;padding:14px 8px;border-bottom:1px solid var(--line);align-items:center}
+.rh{font-size:13px;color:var(--ink2);font-weight:600;padding-top:10px;padding-bottom:10px}
+.rr{font-size:15px;transition:background .3s}.rr b{font-size:16px}.rr span{color:var(--ink2)}.rr .has{color:var(--ink)}
+.rr.fail .has{color:var(--bad);font-weight:600}.rr.na{opacity:.55}
+.rr.flip{animation:flip 2.2s var(--ease)}
+@keyframes flip{0%,40%{background:#fff4c2}100%{background:transparent}}
+.res{display:inline-flex;align-items:center;gap:7px;font-weight:600;font-size:15px;justify-self:start}
+.res.ok{color:var(--ok)}.res.bad{color:var(--bad)}.res.na{color:var(--ink3);font-weight:400}
+.panel-h{font:600 22px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.01em;text-align:center;margin-top:56px}
+.hint{text-align:center;color:var(--ink2);font-size:15px;margin-top:6px}
+.chips{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:18px}
+.chip{padding:10px 18px;border-radius:980px;background:var(--fill);font-size:15px;transition:background .2s,color .2s}
+.chip:hover{background:#e8e8ed}.chip.on{background:var(--ink);color:#fff}.chip.ghost{background:none;color:var(--blue)}
+.diff{max-width:720px;margin:26px auto 0;padding:16px 20px;border-radius:16px;background:#fff8dc}
+.dh{font-size:13px;font-weight:600;color:#7a5d00;margin-bottom:6px}
+.dr{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:15px;padding:3px 0}
+.dr span{font-weight:600;margin-right:6px}.dr s{color:var(--ink2)}.dr b{font-weight:600}
+.pushbox{text-align:center;margin-top:30px}
+@media (max-width:760px){.pick{grid-template-columns:1fr}.rh{display:none}.rr{grid-template-columns:1fr;gap:4px}}
+.step.on{display:block;animation:rise .55s var(--ease) both}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.step.on{animation:none}.dot{transition:none}}
+.foot{position:fixed;inset:auto 0 0;height:84px;display:flex;align-items:center;justify-content:center;gap:18px;background:linear-gradient(to top,#fff 70%,rgba(255,255,255,0));z-index:5}
+.next{background:var(--blue);color:#fff;font-weight:500;font-size:17px;padding:12px 30px;border-radius:980px;min-width:148px;transition:background .2s}
+.next:hover{background:var(--blue-h)}
+.back{color:var(--blue);font-size:17px;padding:12px 18px}
+.back[disabled]{visibility:hidden}
+
+/* type */
+h1{font:600 clamp(34px,4.4vw,52px)/1.08 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;letter-spacing:-.022em;text-align:center;text-wrap:balance;margin:0 auto 18px;max-width:18ch}
+.lede{font-size:21px;line-height:1.38;color:var(--ink2);text-align:center;max-width:36em;margin:0 auto;text-wrap:pretty}
+.lede b{color:var(--ink);font-weight:600}
+.quote{font-size:15px;color:var(--ink3);text-align:center;margin:16px auto 0;max-width:42em}
+.stage{margin:48px auto 0;max-width:720px}
+.center{text-align:center}
+
+/* actions */
+.act{display:inline-flex;align-items:center;gap:8px;background:var(--fill);color:var(--ink);font-weight:500;padding:11px 20px;border-radius:980px;transition:background .2s}
+.act:hover{background:#e8e8ed}.act[disabled]{opacity:.5;cursor:progress}
+.act.primary{background:var(--ink);color:#fff}.act.primary:hover{background:#333336}
+.link{color:var(--blue);font-size:15px;padding:4px 0}
+.row-actions{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+/* lists */
+.list{border-top:1px solid var(--line)}
+.li{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:16px 4px;border-bottom:1px solid var(--line)}
+.li .t{font-weight:600}.li .s{font-size:14px;color:var(--ink2);margin-top:2px}
+.li.btnrow{cursor:pointer;width:100%;text-align:left}.li.btnrow:hover{background:#fafafa}
+.group-h{font-size:13px;font-weight:600;color:var(--ink2);margin:30px 4px 8px}
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:14px;font-weight:600;padding:5px 12px;border-radius:980px;white-space:nowrap}
+.badge.ok{background:var(--okbg);color:var(--ok)}.badge.bad{background:var(--badbg);color:var(--bad)}.badge.tier{background:var(--fill);color:var(--ink)}
+.chev{color:var(--ink3);margin-left:10px}
+
+/* flow on welcome */
+.flow{display:flex;justify-content:center;align-items:center;gap:14px;flex-wrap:wrap;margin-top:44px;font-size:17px}
+.flow span{padding:10px 18px;border-radius:980px;background:var(--fill)}
+.flow .arr{background:none;padding:0;color:var(--ink3)}
+.flow .end{background:none;padding:0;font-weight:600;white-space:nowrap}
+.flow .end span{background:none;padding:0}
+
+/* verdict */
+.verdict{display:flex;align-items:center;justify-content:center;gap:12px;font:600 34px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.015em;margin:28px 0 6px}
+.verdict.ok{color:var(--ok)}.verdict.bad{color:var(--bad)}
+.because{text-align:center;color:var(--ink2);font-size:17px;max-width:34em;margin:0 auto}
+.checks{margin:28px auto 0;max-width:520px}
+.ck{display:flex;align-items:center;gap:14px;padding:12px 4px;border-bottom:1px solid var(--line);font-size:17px}
+.ck:first-child{border-top:1px solid var(--line)}
+.ck .ic{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none}
+.ck.pass .ic{background:var(--okbg);color:var(--ok)}.ck.fail .ic{background:var(--badbg);color:var(--bad)}.ck.na .ic{background:var(--fill);color:var(--ink3)}
+.ck.fail{font-weight:600}.ck.na{color:var(--ink3)}
+.ck small{margin-left:auto;font-size:13px;color:var(--ink3);font-weight:400}
+
+/* segmented */
+.seg{display:inline-flex;background:var(--fill);border-radius:12px;padding:3px;gap:2px}
+.seg button{padding:8px 16px;border-radius:9px;font-size:15px;color:var(--ink2)}
+.seg button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+/* bars */
+.bars{margin:30px auto 0;max-width:640px}
+.br{display:grid;grid-template-columns:150px 1fr;gap:16px;align-items:center;margin:9px 0}
+.br .n{font-size:14px;text-align:right;color:var(--ink2)}
+.br .pair{display:grid;gap:3px}
+.bar{height:12px;border-radius:0 6px 6px 0;position:relative;transform-origin:left;animation:grow .8s var(--ease) both}
+.bar i{position:absolute;left:calc(100% + 8px);top:-3px;font:normal 12px/1 -apple-system,sans-serif;color:var(--ink2);white-space:nowrap}
+@keyframes grow{from{transform:scaleX(0)}to{transform:none}}
+@media (prefers-reduced-motion:reduce){.bar{animation:none}}
+.legend{display:flex;gap:22px;justify-content:center;font-size:14px;color:var(--ink2);margin-top:18px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:7px}
+.facts{display:flex;justify-content:center;gap:56px;margin-top:34px;flex-wrap:wrap}
+.fact{text-align:center}.fact b{display:block;font:600 40px/1 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.02em}
+.fact span{font-size:14px;color:var(--ink2)}
+
+/* details */
+details{margin:26px auto 0;max-width:640px}
+summary{cursor:pointer;color:var(--blue);font-size:15px;list-style:none;text-align:center}
+summary::-webkit-details-marker{display:none}
+details[open] summary{margin-bottom:14px}
+.detail-body{font-size:15px;color:var(--ink2)}
+pre{background:var(--fill);color:var(--ink);border-radius:14px;padding:18px 20px;font:13px/1.55 ui-monospace,"SF Mono",Menlo,monospace;white-space:pre-wrap;max-height:360px;overflow:auto;margin-top:8px;text-align:left}
+.tierrow{display:grid;grid-template-columns:120px 1fr;gap:16px;padding:12px 0;border-bottom:1px solid var(--line);font-size:15px;color:var(--ink)}
+.tierrow b{font-weight:600}
+select{font:inherit;font-size:17px;padding:10px 38px 10px 16px;border-radius:12px;border:1px solid #d2d2d7;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%2386868b' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 14px center;-webkit-appearance:none;appearance:none;color:var(--ink)}
+.try{display:flex;gap:12px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:18px}
+.result{text-align:center;margin-top:18px;min-height:52px;font-size:17px}
+.spinner{display:inline-block;width:18px;height:18px;border:2px solid #d2d2d7;border-top-color:var(--ink);border-radius:50%;animation:sp .8s linear infinite;vertical-align:-3px;margin-right:10px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.wait{text-align:center;color:var(--ink2);margin-top:30px}
+.recap .li{grid-template-columns:28px 1fr auto}
+.num{width:30px;height:30px;border-radius:50%;background:var(--fill);display:grid;place-items:center;font-weight:600;font-size:15px}
+.recap .ok{color:var(--ok)}
+.form{display:grid;grid-template-columns:1fr 1fr;gap:14px 18px;max-width:640px;margin:36px auto 0}
+.form label{font-size:13px;color:var(--ink2);display:grid;gap:6px}
+.form select,.form input{width:100%}
+.form input{font:inherit;font-size:17px;padding:10px 16px;border-radius:12px;border:1px solid #d2d2d7}
+.answers{display:flex;justify-content:center;gap:48px;margin-top:30px;flex-wrap:wrap}
+.answer{text-align:center}.answer span{font-size:14px;color:var(--ink2)}.answer b{display:block;font:600 28px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;margin-top:4px}
+.truth{text-align:center;margin-top:22px;font-size:15px;color:var(--ink2)}
+@media (max-width:640px){.flow .arr{display:none}.flow{gap:8px}main{padding:96px 20px 130px}.br{grid-template-columns:96px 1fr}.form{grid-template-columns:1fr}.top{padding:0 16px}.dots{display:none}}
 </style></head><body>
-<header><h1>AI Governance Registry</h1><nav>
-<button class="on" data-t="brief">0 · The task</button><button data-t="registry">1 · Registry</button><button data-t="risk">2 · Risk level</button>
-<button data-t="gate">3 · Release check</button><button data-t="github">4 · On GitHub</button><button data-t="evidence">5 · Proof in numbers</button><button data-t="try">6 · Try the AI</button></nav></header>
-<main>
-
-<section class="tab on" id="brief"><h2>Our task, and where we prove each part</h2>
-<div class="brief"><small style="display:block;color:var(--muted);font-size:14px;font-weight:600">CASE STUDY</small>"A company needs every model to be <b>documented</b>, <b>risk-rated</b> and <b>approved</b> before release."</div>
-<div class="flow"><div class="fbox">A team builds an AI and writes its card</div><div class="arrow">→</div><div class="fbox">Uploads it to GitHub</div><div class="arrow">→</div>
-<div class="fbox">Our checker runs by itself</div><div class="arrow">→</div><div class="fbox">5 checks, using the rule book</div><div class="arrow">→</div><div class="fbox"><b class="yes">✓ Released</b> or <b class="no">✗ Blocked</b></div></div>
-<div id="checklist"><p class="note"><span class="spin"></span>Loading live status…</p></div></section>
-
-<section class="tab" id="registry"><h2>1 · The registry</h2><p class="sub">Every AI and every dataset has a <b>card</b>: a short document about it, kept as a file on GitHub. The status is checked live. Click a row to read its card.</p>
-<h3>AI cards</h3><div id="modelTable"></div><h3>Data cards</h3><div id="dataTable"></div>
-<h3>The rule book: what each risk level needs</h3><div id="rules"></div>
-<p style="margin-top:6px"><b>The checker's settings:</b> <button class="btn light" onclick="show('registry/policy.yaml')">Open the rule book (policy.yaml)</button><button class="btn light" onclick="show('.github/workflows/governance-gate.yml')">Open the GitHub setup (workflow)</button></p><div id="cardView" style="margin-top:20px"></div></section>
-
-<section class="tab" id="risk"><h2>2 · Risk level (EU AI Act)</h2><p class="sub">The team only says what the AI is <b>used for</b>. Our checker uses the EU AI Act to decide how risky it is. So no one can call a loan AI "harmless" to skip the rules.</p>
-<div id="riskChains"></div><h3>Try it with any use</h3><div class="grid"><div class="panel"><label>What is the AI used for?</label><select id="useCase"></select>
-<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="people" style="width:auto">It chats with people</label>
-<label style="display:flex;gap:8px;align-items:center;color:var(--ink)"><input type="checkbox" id="content" style="width:auto">It creates images, text or audio</label>
-<button class="btn" id="classifyBtn">Check the risk level</button></div><div class="panel" id="classifyOut"><p class="note">Pick a use and press the button.</p></div></div></section>
-
-<section class="tab" id="gate"><h2>3 · Release check: three example AIs</h2><p class="sub">This runs our real checker. Tick a box to break something first, and see if it gets caught. (Your files are not changed.)</p>
-<div class="grid"><div class="panel"><b>Choose an AI</b><div class="models" id="models" style="margin-top:12px"></div>
-<div class="breaks" style="margin-top:20px"><b>Break something? (you can skip this)</b>
-<label><input type="checkbox" value="edit_results">Secretly edit its test results to look perfect</label>
-<label><input type="checkbox" value="withdraw_approval">The manager withdraws approval</label>
-<label><input type="checkbox" value="delete_limitations">Delete the "limitations" section</label>
-<label><input type="checkbox" value="claim_minimal">Claim it's "minimal risk" to dodge the rules</label></div>
-<button class="btn" id="gateBtn">Submit for release</button></div><div class="panel" id="gateOut"><p class="note">Choose an AI and press "Submit for release".</p></div></div></section>
-
-<section class="tab" id="github"><h2>4 · The same checks, by themselves, on GitHub</h2>
-<p class="sub">GitHub runs our checker every time someone changes something, with one check per AI. This is the <b>live</b> result from GitHub: the current version, and a proposed change where someone removed a section from the fair AI's card.</p><div id="ghOut"><p class="note"><span class="spin"></span>Asking GitHub…</p></div></section>
-
-<section class="tab" id="evidence"><h2>5 · Proof in numbers</h2><p class="sub">The course asks for real measurements, not just claims. Both buttons run live.</p>
-<h3>Responsible AI: is the loan AI fair? Test both versions on 39,133 real people</h3><button class="btn" id="auditBtn">Run the fairness test</button><div id="auditOut"></div>
-<h3 style="margin-top:34px">Big data: run the same fairness check on 1.6 million applications</h3>
-<p class="note" style="margin-top:0">We use Apache Spark, which shares the work across the computer's cores. The 1.6 million are the census people copied with new IDs.</p>
-<button class="btn" id="scaleBtn">Check 1.6 million applications now</button><div id="scaleOut"></div>
-<div class="panel" style="margin-top:20px;max-width:860px"><b>Measured earlier on 25 million applications</b>
-<div class="grp"><div class="gname">Normal Python, 1 core</div><div class="b" style="width:85%;background:var(--base)"><span>85 s</span></div></div>
-<div class="grp"><div class="gname">Spark, 8 cores</div><div class="b" style="width:20%;background:var(--fair)"><span>20 s: 4.3× faster, same answer</span></div></div></div></section>
-
-<section class="tab" id="try"><h2>6 · Try the loan AI yourself</h2><p class="sub">This is the example AI our checker tests. It guesses if a person earns over $50,000. It is never told their race or sex.</p>
-<div class="grid"><div class="panel" id="form"></div><div><div class="answers" id="answers"></div><div id="truth"></div></div></div></section>
-</main>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="i-ok" viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-no" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-na" viewBox="0 0 16 16"><path d="M4.5 8h7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-arrow" viewBox="0 0 16 16"><path d="M3 8h10m-4-4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-chev" viewBox="0 0 16 16"><path d="M6 3.5L10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</defs></svg>
+<header class="top"><div class="brand">AI Governance Registry</div><nav class="dots" id="dots" aria-label="Steps"></nav><div class="count" id="count"></div></header>
+<main id="main"></main>
+<footer class="foot"><button class="back" id="back">Back</button><button class="next" id="next">Continue</button></footer>
 <script>
-const C = __CHOICES__, USES = __USES__;
-const $ = s => document.querySelector(s), J = async (u, b) => (await fetch(u, b ? {method: "POST", body: JSON.stringify(b)} : {})).json();
-const go = t => { document.querySelectorAll("nav button,.tab").forEach(e => e.classList.remove("on"));
-  document.querySelector(`nav button[data-t=${t}]`).classList.add("on"); $("#" + t).classList.add("on"); window.scrollTo(0, 0); if (t == "github") loadGH(); };
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => go(b.dataset.t));
-const busy = (el, msg) => el.innerHTML = `<p class="note" style="margin-top:16px"><span class="spin"></span>${msg}</p>`;
+const C = __CHOICES__, USES = __USES__, DEMO = __DEMO__;
+const $ = s => document.querySelector(s);
+const J = async (u, b) => (await fetch(u, b ? {method: "POST", body: JSON.stringify(b)} : {})).json();
+const icon = (n, cls = "i") => `<svg class="${cls}"><use href="#i-${n}"/></svg>`;
 const pct = x => (x * 100).toFixed(0) + "%";
-const tierPill = t => `<span class="pill ${t == "unacceptable" ? "ban" : "tier"}">${t == "unacceptable" ? "BANNED" : t.toUpperCase() + " RISK"}</span>`;
-const verdictPill = ok => `<span class="pill ${ok ? "ok" : "bad"}">${ok ? "✓ Released" : "✗ Blocked"}</span>`;
+const esc = s => String(s).replace(/[<&>]/g, c => ({"<": "&lt;", "&": "&amp;", ">": "&gt;"}[c]));
+const wait = msg => `<p class="wait"><span class="spinner"></span>${msg}</p>`;
+const TIER = {unacceptable: "Banned", high: "High risk", limited: "Limited risk", minimal: "Low risk"};
+let O = null;  // overview: registry + live gate results
 
-// ---- 0 brief + 1 registry + 2 risk chains (one live gate run on every model)
-J("/api/overview").then(o => {
-  const rel = o.models.filter(m => m.ok).length, fair = o.models.find(m => m.id == "income-fair"), base = o.models.find(m => m.id == "income-baseline");
-  const taxi = o.models.find(m => m.id == "taxi-eta");
-  const rows = [
-    ["What to do", "\u201cBuild a registry of model and dataset cards\u201d", `${o.models.length} AI cards and ${o.datasets.length} data cards, kept on GitHub`, "go('registry')"],
-    ["", "\u201c…with a risk classification based on the NIST AI RMF or the EU AI Act\u201d", `Risk level worked out from what each AI is used for: ${o.models.map(m => m.tier).join(", ")}`, "go('risk')"],
-    ["", "\u201cAdd CI checks that block deployment…\u201d", "GitHub runs our checker on every change. If it fails, the change can't go in", "go('github')"],
-    ["", "\u201c…when fairness…\u201d requirements are not met", `The first loan AI is blocked: fairness score ${base.fairness.RAC1P.di.toFixed(2)} (needs 0.80)`, "runGate('income-baseline', [])"],
-    ["", "\u201c…documentation…\u201d requirements are not met", "The taxi AI is blocked: its card has no \u201climitations\u201d section", "runGate('taxi-eta', [])"],
-    ["", "\u201c…or lineage requirements are not met\u201d", "If test results are changed after training, the AI is blocked", "runGate('income-fair', ['edit_results'])"],
-    ["Submit", "\u201cRegistry\u201d", "The registry folder: all the cards and the rule book", "go('registry')"],
-    ["", "\u201cCI gate configuration\u201d", "The rule book (policy.yaml) and the GitHub setup file", "show('.github/workflows/governance-gate.yml')"],
-    ["", "\u201cThree example models that pass or fail\u201d", `${rel} released and ${o.models.length - rel} blocked, each for a different reason`, "go('gate')"],
-    ["Also required by the course", "Responsible AI, proven with numbers", `Fairness measured on 39,133 people: ${base.fairness.RAC1P.di.toFixed(2)} vs ${fair.fairness.RAC1P.di.toFixed(2)}`, "go('evidence')"],
-    ["", "Big data, proven with numbers", "Spark checks 1.6 million applications live, and was 4.3× faster on 25 million", "go('evidence')"],
-    ["", "Only public data", "US Census survey · New York taxi trips", "go('registry')"]];
-  $("#checklist").innerHTML = rows.map(([sec, a, b, act]) => (sec ? `<h3>${sec}</h3>` : "") +
-    `<div class="check-row"><div class="tick">✓</div><b>${a}</b><span>${b}</span><button class="btn" onclick="${act}">Show me →</button></div>`).join("");
-  $("#modelTable").innerHTML = `<table><tr><th>AI</th><th>Owner</th><th>Version</th><th>Used for</th><th>Risk level</th><th>Status</th></tr>` +
-    o.models.map(m => `<tr class="click" onclick="show('${m.file}')"><td><b>${m.name}</b><br><small>${m.id}</small></td><td>${m.owner}</td><td>${m.version}</td><td>${m.use_case}</td><td>${tierPill(m.tier)}</td><td>${verdictPill(m.ok)}${m.why.length ? "<br><small class='no'>" + m.why.join("<br>") + "</small>" : ""}</td></tr>`).join("") + "</table>";
-  $("#dataTable").innerHTML = `<table><tr><th>Dataset</th><th>Where it came from</th><th>Licence</th><th>Rows</th><th>Fingerprint</th><th>Privacy note</th></tr>` +
-    o.datasets.map(d => `<tr class="click" onclick="show('${d.file}')"><td><b>${d.name}</b></td><td><small>${d.url}</small></td><td>${d.license}</td><td>${(d.rows || 0).toLocaleString()}</td><td><code style="margin:0">${d.sha}…</code></td><td>${d.privacy ? "<span class='yes'>✓ present</span>" : "<span class='no'>✗ missing</span>"}</td></tr>`).join("") + "</table>";
-  const R = o.rules, T = R.tiers;
-  $("#rules").innerHTML = `<p class="note" style="margin:0 0 10px"><b>Every AI card needs:</b> ${R.all.join(" · ")}<br><b>Every data card needs:</b> ${R.datasets.join(" · ")}</p><div class="tiers">
-    <div class="tierbox"><b>${tierPill("unacceptable")}</b>Can never be released.</div>
-    <div class="tierbox"><b>${tierPill("high")}</b>Also needs:<ul>${T.high.fields.map(f => `<li>${f}</li>`).join("")}<li>Fair: the least-approved group gets at least ${T.high.fairness.disparate_impact_min * 100}% of the most-approved group's rate</li><li>Fair: among people who qualify, groups differ by at most ${T.high.fairness.equal_opportunity_diff_max * 100} points</li><li>Approved by someone who didn't build it</li></ul></div>
-    <div class="tierbox"><b>${tierPill("limited")}</b>Also needs:<ul>${T.limited.fields.map(f => `<li>${f}</li>`).join("")}</ul></div>
-    <div class="tierbox"><b>${tierPill("minimal")}</b>Only the basics.</div></div>
-    <p class="note">From <code style="display:inline">registry/policy.yaml</code>. Risk levels come from the EU AI Act. The 80% rule is an existing US fairness standard.</p>`;
-  $("#riskChains").innerHTML = o.models.map(m => `<div class="panel" style="margin-bottom:12px"><div class="chain"><b style="min-width:170px">${m.name}</b>
-    <div class="step"><small>The team says it's for</small>${m.use_case}</div><div class="arrow">→</div><div class="step"><small>EU AI Act says</small>${m.basis}</div><div class="arrow">→</div>
-    <div class="step"><small>Our checker decides</small>${tierPill(m.tier)}</div><div class="step"><small>The team wrote</small>${m.declared} ${m.declared == m.tier ? "<span class='yes'>✓ matches</span>" : "<span class='no'>✗ mismatch</span>"}</div></div></div>`).join("");
-});
-window.show = async p => { go("registry"); const t = await (await fetch("/api/file?p=" + encodeURIComponent(p))).text();
-  $("#cardView").innerHTML = `<h3>${p}</h3><pre>${t.replace(/[<&]/g, c => ({"<": "&lt;", "&": "&amp;"}[c]))}</pre>`; $("#cardView").scrollIntoView({behavior: "smooth"}); };
+const CASES = {
+  "income-fair": {n: 1, title: "The fair loan AI", short: "Built carefully, with a fairness rule.",
+    lede: "It guesses who earns over $50,000, to help a bank check loan applications. Loans are <b>high risk</b>, so all five rules apply.",
+    changes: [["delete_limitations", "Delete its limitations section"], ["edit_results", "Secretly edit its test results"], ["withdraw_approval", "The manager takes back approval"], ["claim_minimal", "Call it low risk to skip rules"]]},
+  "income-baseline": {n: 2, title: "The first loan AI", short: "Same job, built the quick way.",
+    lede: "Same job as Case 1, but the team only hid race and sex from it, and a manager approved it. Loans are <b>high risk</b>, so all five rules apply.",
+    changes: [["edit_results", "Edit its test results so it looks fair"], ["claim_minimal", "Call it low risk to skip the fairness rule"]]},
+  "taxi-eta": {n: 3, title: "The taxi AI", short: "Low risk, but sloppy paperwork.",
+    lede: "It guesses how long a taxi ride takes. That's <b>low risk</b>, so only the first three rules apply.",
+    changes: [["fix_paperwork", "Fix its paperwork"]]},
+};
+const RULES = [["risk", "How risky is it?"], ["documentation", "Is its description complete?"], ["lineage", "Can we trust where it came from?"], ["fairness", "Is it fair to everyone?"], ["approval", "Did someone else approve it?"]];
+let model = "income-fair", applied = null, last = null;
 
-// ---- 2 classify
-$("#useCase").innerHTML = [["High risk (Annex III)", USES.high], ["Banned (Article 5)", USES.banned], ["Other", USES.other]].map(([g, o]) =>
-  `<optgroup label="${g}">${Object.entries(o).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</optgroup>`).join("");
-$("#classifyBtn").onclick = async () => { const r = await J("/api/classify", {use_case: $("#useCase").value, people: $("#people").checked, content: $("#content").checked});
-  $("#classifyOut").innerHTML = `<div class="decision">${tierPill(r.tier)}</div><p>${r.basis}</p>${!r.deployable ? "<div class='banner bad'>Banned: it can never be released.</div>" :
-    `<p class="note">On top of the basics, it needs:</p><ul style="padding-left:20px;margin-top:6px">${r.fields.map(f => `<li>${f}</li>`).join("")}${r.fairness ? "<li>Pass the fairness checks</li>" : ""}${r.approval ? "<li>Independent sign-off</li>" : ""}${!r.fields.length && !r.fairness ? "<li>Nothing extra</li>" : ""}</ul>`}`; };
+const STEPS = [
+ { // case study
+  html: () => `<h1>No AI goes live without passing a check.</h1>
+   <p class="lede">A company builds AI programs. Its rule: <b>no AI is released</b> unless it is properly described, its risk is known, and someone else has approved it. We built the checker that enforces this, automatically.</p>
+   <div class="flow"><span>An AI and its description</span><svg class="i arr"><use href="#i-arrow"/></svg><span>Checked against the rule book</span><svg class="i arr"><use href="#i-arrow"/></svg><span class="end"><b style="color:var(--ok)">Released</b> <span style="color:var(--ink3);font-weight:400">or</span> <b style="color:var(--bad)">Blocked</b></span></div>
+   <div class="stage"><div class="group-h center">The rule book asks every AI five things</div><div class="rulelist">${RULES.map(([, q], i) => `<span><b>${i + 1}</b>${q}</span>`).join("")}</div></div>`, next: "Pick a case"},
+ { // pick
+  html: () => `<h1>Pick an AI to check.</h1>
+   <p class="lede">We made three example AIs. Each one goes through the same rule book.</p>
+   <div class="pick">${Object.entries(CASES).map(([id, c]) => `<button class="choice" onclick="openCase('${id}')"><span class="cn">Case ${c.n}</span><b>${c.title}</b><span>${c.short}</span><span class="go">Check it ${icon("chev")}</span></button>`).join("")}</div>`,
+  next: "Open Case 1", onNext: () => openCase("income-fair")},
+ { // the case
+  html: () => `<div id="case"></div>`, run: () => renderCase(), next: "Next: bigger scale"},
+ { // scale
+  html: () => `<h1>It works for millions of applications.</h1>
+   <p class="lede">A real bank checks millions of applications. Our fairness check runs on <b>Apache Spark</b>, which splits the work across the computer's processor cores.</p>
+   <div class="stage center"><button class="act primary" id="runscale">Check 1.6 million applications now</button><div id="scaleout"></div>
+   <div class="group-h center" style="margin-top:46px">Measured on 25 million applications</div>
+   <div class="bars" style="margin-top:12px"><div class="br"><div class="n">Normal Python</div><div class="bar" style="width:72%;background:var(--first)"><i>85 s</i></div></div><div class="br"><div class="n">Spark, 8 cores</div><div class="bar" style="width:17%;background:var(--fair)"><i>20 s · 4.3× faster, same answer</i></div></div></div>
+   <p class="quote" style="margin-top:28px">The millions are the census people copied with new IDs, so this tests speed, not new findings.</p></div>`,
+  run: () => { $("#runscale").onclick = async () => { $("#runscale").disabled = true; $("#scaleout").innerHTML = wait("Spark is checking 1.6 million applications…");
+   const r = await J("/api/scale"); $("#runscale").disabled = false;
+   $("#scaleout").innerHTML = `<div class="facts"><div class="fact"><b>${r.rows.toLocaleString()}</b><span>applications checked</span></div><div class="fact"><b>${r.seconds.toFixed(1)} s</b><span>time taken</span></div><div class="fact"><b style="color:var(--bad)">${r.di.toFixed(2)}</b><span>first loan AI's fairness: still blocked</span></div></div>`; }; }},
+ { // summary
+  html: () => `<h1>Every AI is checked before it's released.</h1>
+   <p class="lede">One rule book. Every change goes through GitHub, which runs the checker and refuses anything that breaks a rule.</p>
+   <div class="stage recap"><div class="list">
+    ${[["Case 1: Fair loan AI", "Released. Any change that breaks a rule is refused on GitHub.", true, "income-fair"], ["Case 2: First loan AI", "Blocked: unfair (0.30, needs 0.80)", false, "income-baseline"], ["Case 3: Taxi AI", "Blocked: paperwork missing. Fixing it releases it.", false, "taxi-eta"]].map(([a, b, ok, id]) =>
+      `<button class="li btnrow" onclick="openCase('${id}')"><span style="color:${ok ? "var(--ok)" : "var(--bad)"}">${icon(ok ? "ok" : "no")}</span><div><div class="t">${a}</div><div class="s">${b}</div></div>${icon("chev", "i chev")}</button>`).join("")}
+   </div>
+   <details><summary>See every AI and dataset description (the registry)</summary><div id="reg"></div><div id="cardview"></div></details>
+   <details><summary>See the real rule book</summary><div class="detail-body" id="rules"></div></details></div>`, next: "Build your own AI",
+  run: async () => { const o = await overview(); $("#rules").innerHTML = rulesHTML(o.rules);
+   const row = (t, s, file) => `<button class="li btnrow" onclick="card('${file}')"><div><div class="t">${t}</div><div class="s">${s}</div></div>${icon("chev", "i chev")}</button>`;
+   $("#reg").innerHTML = `<div class="list">` + o.models.map(m => row(m.name, `${m.use_case} · ${TIER[m.tier]}`, m.file)).join("") + o.datasets.map(d => row(d.name, `${(d.rows || 0).toLocaleString()} rows · public data`, d.file)).join("") + `</div>`; }},
+ { // build your own
+  html: () => `<h1>Now build your own AI.</h1>
+   <p class="lede">Describe an AI the way a team would, and submit it. The <b>real checker</b> reads your card and decides, live. Change anything and it re-checks.</p>
+   <div class="build"><div class="bform">
+    <label>Name<input id="b_name" value="My AI"></label>
+    <label>What is it used for?<select id="b_use">${[["High risk", USES.high], ["Banned", USES.banned], ["Everything else", USES.other]].map(([g, x]) =>
+      `<optgroup label="${g}">${Object.entries(x).map(([k, v]) => `<option value="${k}"${k == "employment" ? " selected" : ""}>${v}</option>`).join("")}</optgroup>`).join("")}</select></label>
+    <label class="cb"><input type="checkbox" id="b_chats">It chats with people</label>
+    <label>Risk level the team writes on its card<select id="b_declared"><option value="high">High risk</option><option value="limited">Limited risk</option><option value="minimal">Low risk</option><option value="unacceptable">Banned</option></select></label>
+    <label>How was it trained?<select id="b_training"><option value="fair">Carefully, with a fairness rule</option><option value="quick">The quick way</option></select></label>
+    <div class="blabel">Sections in its description</div>
+    ${[["limitations", "Limitations"], ["users", "Who will use it"], ["out_of_scope", "What it must not be used for"], ["evaluation", "How it was tested"], ["ethics", "Ethical concerns"], ["oversight", "How humans oversee it"], ["notice", "“You are talking to an AI” notice"]].map(([k, l]) =>
+      `<label class="cb"><input type="checkbox" id="b_${k}" ${k != "notice" ? "checked" : ""}>${l}</label>`).join("")}
+    <label class="cb"><input type="checkbox" id="b_privacy" checked>Its data card has a privacy note</label>
+    <label>Approval<select id="b_approval"><option value="board">Approved by the governance board</option><option value="self">Approved by its own team</option><option value="none">Not approved yet</option></select></label>
+   </div><div id="bout">${wait("Checking…")}</div></div>`,
+  run: () => { let t; const go = () => { clearTimeout(t); t = setTimeout(submitOwn, 250); };
+   document.querySelectorAll(".bform input,.bform select").forEach(el => el.addEventListener(el.type == "text" ? "input" : "change", go)); submitOwn(); }},
+ { // try
+  html: () => `<h1>Try the loan AI yourself.</h1>
+   <p class="lede">Describe a person and see what both loan AIs guess. They are never told race or sex.</p>
+   <div class="form" id="form"></div><div class="row-actions" style="margin-top:22px"><button class="act primary" id="ask">Ask the AIs</button><button class="act" id="real">Load a real person</button></div><div id="answers"></div>`, next: "Back to the start",
+  run: () => { const F = [["AGEP", "Age"], ["SCHL", "Education"], ["OCCP", "Job"], ["COW", "Employer"], ["WKHP", "Hours a week"], ["MAR", "Marital status"], ["POBP", "Born in"], ["RELP", "Role at home"]];
+   $("#form").innerHTML = F.map(([k, l]) => `<label>${l}${C[k] ? `<select id="${k}">${Object.entries(C[k]).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>` : `<input id="${k}" type="number" value="${k == "AGEP" ? 35 : 40}">`}</label>`).join("");
+   const ask = async truth => { const r = await J("/api/predict", Object.fromEntries(F.map(([k]) => [k, $("#" + k).value])));
+     const a = (m, n) => `<div class="answer"><span>${n} says</span><b style="color:${r[m].yes ? "var(--ok)" : "var(--bad)"}">${r[m].yes ? "Yes, over $50k" : "No"}</b><span>${pct(r[m].chance)} sure it's a yes</span></div>`;
+     $("#answers").innerHTML = `<div class="answers">${a("income-baseline", "First loan AI")}${a("income-fair", "Fair loan AI")}</div>` +
+       (truth ? `<p class="truth">A real person from the US census (${truth.sex}, race group "${truth.race}", never shown to the AI). Really earns over $50k: <b style="color:${truth.truth ? "var(--ok)" : "var(--bad)"}">${truth.truth ? "Yes" : "No"}</b></p>` : `<p class="truth">Change the job or the hours and ask again.</p>`); };
+   $("#ask").onclick = () => ask(null);
+   $("#real").onclick = async () => { const p = await J("/api/sample"); F.forEach(([k]) => $("#" + k).value = p[k]); ask(p); }; }},
+];
 
-// ---- 3 gate
-const Q = {risk: "How risky is it? (EU AI Act)", documentation: "Is the paperwork complete?", lineage: "Can we trace where it came from?", fairness: "Is it fair to every group?", approval: "Did someone independent approve it?"};
-let chosen = "income-fair";
-$("#models").innerHTML = [["income-fair", "Fair loan AI", "high risk"], ["income-baseline", "First loan AI", "high risk"], ["taxi-eta", "Taxi trip-time AI", "minimal risk"]].map(([id, n, s]) =>
-  `<button class="chip ${id == chosen ? "on" : ""}" data-id="${id}">${n}<small>${s}</small></button>`).join("");
-document.querySelectorAll(".chip").forEach(c => c.onclick = () => { document.querySelectorAll(".chip").forEach(x => x.classList.remove("on")); c.classList.add("on"); chosen = c.dataset.id; });
-$("#gateBtn").onclick = () => runGate(chosen, [...document.querySelectorAll(".breaks input:checked")].map(i => i.value));
-window.runGate = async (model, breaks) => { go("gate"); chosen = model;
-  document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.id == model));
-  document.querySelectorAll(".breaks input").forEach(i => i.checked = breaks.includes(i.value));
-  $("#gateBtn").disabled = true; busy($("#gateOut"), "Running the 5 checks…"); const r = await J("/api/gate", {model, breaks}); $("#gateBtn").disabled = false;
-  $("#gateOut").innerHTML = `<small style="color:var(--muted)">${r.id} · ${r.basis}</small><div class="decision ${r.ok ? "yes" : "no"}">${r.ok ? "✓ Released" : "✗ Blocked"}</div>
-   <div class="lights">${Object.entries(Q).map(([g, q]) => `<div class="${r.status[g] == "n/a" ? "na" : r.status[g]}"><span class="dot">${{pass: "✓", fail: "✗", "n/a": "–"}[r.status[g]]}</span>${q}${r.status[g] == "n/a" ? " (not needed for this risk level)" : ""}</div>`).join("")}</div>
-   ${r.why.length ? `<ul class="why">${r.why.map(w => `<li>${w}</li>`).join("")}</ul><code>${r.detail.join("\n")}</code>` : ""}
-   ${r.fairness.RAC1P ? `<p class="note">Fairness score by race ${r.fairness.RAC1P.di.toFixed(2)} (needs 0.80) · by sex ${r.fairness.SEX.di.toFixed(2)}</p>` : ""}`; };
+let ownLast = null;
+async function submitOwn() {
+  const v = id => $("#b_" + id), body = {name: v("name").value, use_case: v("use").value, chats: v("chats").checked, declared: v("declared").value,
+    training: v("training").value, approval: v("approval").value, privacy: v("privacy").checked};
+  ["limitations", "users", "out_of_scope", "evaluation", "ethics", "oversight", "notice"].forEach(k => body[k] = v(k).checked);
+  $("#bout").style.opacity = .45; const r = await J("/api/custom", body); $("#bout").style.opacity = 1;
+  const flipped = g => ownLast && ownLast.status[g] != r.status[g];
+  const mark = s => s == "pass" ? `<span class="res ok">${icon("ok")}Yes</span>` : s == "fail" ? `<span class="res bad">${icon("no")}No</span>` : `<span class="res na">${icon("na")}Not needed</span>`;
+  $("#bout").innerHTML = `<div class="verdict ${r.ok ? "ok" : "bad"}" style="margin-top:0">${icon(r.ok ? "ok" : "no")} ${r.ok ? "Released" : "Blocked"}</div>
+    <p class="because">${esc(body.name || "Your AI")} is <b>${TIER[r.tier] || r.tier}</b>. ${r.ok ? "Every rule that applies is met." : r.why.join(" ")}</p>
+    <div class="rt" style="margin-top:20px">${RULES.map(([g, q]) => `<div class="rr mini ${r.status[g] == "n/a" ? "na" : r.status[g]} ${flipped(g) ? "flip" : ""}"><div><b>${q}</b><span class="has">${r.rules[g].has}</span></div>${mark(r.status[g])}</div>`).join("")}</div>
+    <details><summary>See the card you just wrote</summary><pre>${esc(r.card)}</pre></details>`;
+  ownLast = r;
+}
+window.openCase = id => { model = id; applied = null; last = null; loaded.delete(2); go(2); };
 
-// ---- 4 github
-let ghLoaded = false;
-window.loadGH = async () => { if (ghLoaded) return; ghLoaded = true;
-  const g = await J("/api/github"), repo = `https://github.com/${g.repo}`;
-  if (g.error) { $("#ghOut").innerHTML = `<div class="panel">Couldn't reach GitHub (${g.error}).<br><a class="btn" href="${repo}/actions" target="_blank">Open GitHub Actions →</a><a class="btn light" href="${repo}/pulls?q=is%3Apr" target="_blank">Open pull requests →</a></div>`; return; }
-  const icon = c => c.status != "completed" ? "<span class='spin'></span>running" : c.conclusion == "success" ? "<b class='yes'>✓ passed</b>" : c.conclusion == "skipped" ? "skipped" : "<b class='no'>✗ failed</b>";
-  const list = cs => cs.filter(c => c.name != "discover").map(c => `<div class="ghcheck"><a href="${c.url}" target="_blank">${c.name}</a><span>${g.required.includes(c.name) ? "<small style='color:var(--muted)'>required · </small>" : ""}${icon(c)}</span></div>`).join("");
-  const blocked = cs => g.required.some(n => (cs.find(c => c.name == n) || {}).conclusion == "failure");
-  const pr = g.pr;
-  $("#ghOut").innerHTML = `<div class="gh"><div class="panel"><b>Current version</b>${list(g.main)}<p class="note">The fair AI passes and is released. The other two are blocked on purpose.</p><a class="btn light" href="${repo}/actions" target="_blank">Open on GitHub →</a></div>
-    <div class="panel">${pr ? `<b>Proposed change #${pr.number}: ${pr.title}</b>${list(pr.checks)}
-    ${blocked(pr.checks) ? "<div class='banner bad'>✗ This change can't go in: a required check failed</div>" : "<div class='banner ok'>Checks passing</div>"}
-    <a class="btn" href="${pr.url}" target="_blank">Open it on GitHub →</a>` : "<b>No demo pull request found.</b>"}</div></div>`; };
+function renderCase() {
+  const c = CASES[model];
+  $("#case").innerHTML = `<h1 class="caseh">Case ${c.n}: ${c.title}</h1><p class="lede">${c.lede}</p>
+    <div class="casebody"><div id="table">${wait("Checking it against the rule book…")}</div>
+    <div class="panel-h">Now change something</div>
+    <p class="hint">Pick a change. We apply it to a copy and check again, live.</p>
+    <div class="chips">${c.changes.map(([k, l]) => `<button class="chip" data-k="${k}" onclick="change('${k}')">${l}</button>`).join("")}<button class="chip ghost" data-k="" onclick="change(null)">Undo</button></div>
+    <div id="diff"></div><div id="push"></div>
+    <div class="row-actions" style="margin-top:34px"><button class="link" onclick="go(1)">Pick another case</button></div></div>`;
+  check();
+}
+window.change = k => { applied = k; document.querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (b.dataset.k || null) == k && k != null)); check(); };
 
-// ---- 5 evidence
-$("#auditBtn").onclick = async () => { $("#auditBtn").disabled = true; busy($("#auditOut"), "Testing both AIs on 39,133 people…"); const r = await J("/api/audit"); $("#auditBtn").disabled = false;
-  const b = r["income-baseline"], f = r["income-fair"];
-  $("#auditOut").innerHTML = `<p class="note">Both AIs answered for ${r.people.toLocaleString()} people in ${r.seconds.toFixed(1)} s.</p>
-   <div class="stats"><div class="stat"><small>First AI: fairness score</small><b class="no">${b.di.toFixed(2)}</b><small>needs 0.80 or more, so blocked</small></div>
-   <div class="stat"><small>Fair AI: fairness score</small><b class="yes">${f.di.toFixed(2)}</b><small>passes</small></div>
-   <div class="stat"><small>First AI: accuracy</small><b>${pct(b.accuracy)}</b></div><div class="stat"><small>Fair AI: accuracy</small><b>${pct(f.accuracy)}</b><small>the cost of being fair</small></div></div>
-   <div class="panel"><div class="legend" style="margin-bottom:10px"><span><i class="sw" style="background:var(--base)"></i>First AI</span><span><i class="sw" style="background:var(--fair)"></i>Fair AI</span><span style="color:var(--muted)">How often each race group gets a "yes"</span></div>
-   ${b.groups.map((g, i) => `<div class="grp"><div class="gname">${g.group}<br><small style="color:var(--muted)">${g.n.toLocaleString()} people</small></div><div>
-     <div class="b" style="width:${g.rate * 150}%;background:var(--base)"><span>${pct(g.rate)}</span></div><div class="b" style="width:${f.groups[i].rate * 150}%;background:var(--fair);margin-top:3px"><span>${pct(f.groups[i].rate)}</span></div></div></div>`).join("")}
-   <p class="note">Neither AI sees race. The first AI still picked it up from other clues, like job, birthplace and hours worked.</p></div>`; };
-$("#scaleBtn").onclick = async () => { $("#scaleBtn").disabled = true; busy($("#scaleOut"), "Spark is checking 1.6 million applications…"); const r = await J("/api/scale"); $("#scaleBtn").disabled = false;
-  $("#scaleOut").innerHTML = `<div class="stats"><div class="stat"><small>Applications checked</small><b>${r.rows.toLocaleString()}</b></div><div class="stat"><small>Time taken</small><b>${r.seconds.toFixed(1)} s</b></div>
-   <div class="stat"><small>Fairness score (first AI)</small><b class="no">${r.di.toFixed(2)}</b><small>same answer at full size: blocked</small></div></div>`; };
+async function check() {
+  const t = $("#table"); t.style.opacity = .45;
+  const r = await J("/api/gate", {model, breaks: applied ? [applied] : []}); t.style.opacity = 1;
+  const flipped = g => last && last.status[g] != r.status[g];
+  const mark = s => s == "pass" ? `<span class="res ok">${icon("ok")}Yes</span>` : s == "fail" ? `<span class="res bad">${icon("no")}No</span>` : `<span class="res na">${icon("na")}Not needed</span>`;
+  t.innerHTML = `<div class="rt"><div class="rh"><span>Rule</span><span>The rule book asks</span><span>This AI has</span><span></span></div>
+    ${RULES.map(([g, q]) => `<div class="rr ${r.status[g] == "n/a" ? "na" : r.status[g]} ${flipped(g) ? "flip" : ""}"><b>${q}</b><span>${r.rules[g].asks}</span><span class="has">${r.rules[g].has}</span>${mark(r.status[g])}</div>`).join("")}</div>
+    <div class="verdict ${r.ok ? "ok" : "bad"}">${icon(r.ok ? "ok" : "no")} ${r.ok ? "Released" : "Blocked"}</div>
+    <p class="because">${r.ok ? "Every rule that applies is met, so it can go live." : r.why.join(" ")}</p>
+    ${model == "income-baseline" && !applied ? `<details id="whyfair"><summary>See why it's unfair</summary><div id="fairout"></div></details>` : ""}`;
+  $("#whyfair") && $("#whyfair").addEventListener("toggle", showFair, {once: true});
+  $("#diff").innerHTML = r.changes.length ? `<div class="diff"><div class="dh">What changed</div>${r.changes.map(([what, a, b]) => `<div class="dr"><span>${what}</span><s>${esc(a)}</s>${icon("arrow")}<b>${esc(b)}</b></div>`).join("")}</div>` : "";
+  $("#push").innerHTML = `<div class="pushbox"><button class="act primary" onclick="push()">${applied ? "Push this change to GitHub" : "See this AI on GitHub"}</button><p class="hint">${applied ? "Changes reach the real system through GitHub, as a pull request." : "GitHub runs the same checker and only releases AIs that pass."}</p><div id="pr"></div></div>`;
+  last = r;
+}
 
-// ---- 6 try
-const FIELDS = [["AGEP","Age"],["SCHL","Education"],["OCCP","Job"],["COW","Employer"],["WKHP","Hours worked per week"],["MAR","Marital status"],["POBP","Born in"],["RELP","Role in household"]];
-$("#form").innerHTML = FIELDS.map(([k, l]) => `<label>${l}</label>` + (C[k] ? `<select id="${k}">${Object.entries(C[k]).map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>`
-  : `<input id="${k}" type="number" value="${k == "AGEP" ? 35 : 40}">`)).join("") + `<button class="btn" id="askBtn">Ask the AI</button><button class="btn light" id="realBtn">Load a real applicant</button>`;
-async function ask(truth) { const r = await J("/api/predict", Object.fromEntries(FIELDS.map(([k]) => [k, $("#" + k).value])));
-  $("#answers").innerHTML = [["income-baseline", "First AI", "var(--base)"], ["income-fair", "Fair AI", "var(--fair)"]].map(([m, n, c]) =>
-    `<div class="ans"><h3>${n} says</h3><div class="verdict ${r[m].yes ? "yes" : "no"}">${r[m].yes ? "✓ Yes, over $50k" : "✗ No"}</div><small>Confidence it's a yes: ${pct(r[m].chance)}</small><div class="meter"><i style="width:${r[m].chance * 100}%;background:${c}"></i></div></div>`).join("");
-  $("#truth").innerHTML = truth ? `<div class="truth">A <b>real person</b> from the US Census (${truth.sex}, race group "${truth.race}", never shown to the AI). Really earns over $50k? <b class="${truth.truth ? "yes" : "no"}">${truth.truth ? "YES" : "NO"}</b></div>`
-    : `<p class="note">Change any answer and press "Ask the AI" again.</p>`; }
-$("#askBtn").onclick = () => ask(null);
-$("#realBtn").onclick = async () => { const p = await J("/api/sample"); FIELDS.forEach(([k]) => $("#" + k).value = p[k]); ask(p); };
-ask(null);
-</script></body></html>"""
+window.push = async () => {
+  const out = $("#pr"); out.innerHTML = wait("Asking GitHub…");
+  const g = await J("/api/github"), branch = model == "income-fair" && DEMO[applied];
+  if (g.error) { out.innerHTML = `<p class="because">GitHub can't be reached right now.</p>`; return; }
+  const NAME = {"tests": "Our automatic tests", "gate (income-fair)": "Fair loan AI checker", "gate (income-baseline)": "First loan AI checker", "gate (taxi-eta)": "Taxi AI checker"};
+  const row = c => { const ok = c.conclusion == "success", req = g.required.includes(c.name), done = c.status == "completed";
+    return `<div class="ck ${!done ? "na" : ok ? "pass" : "fail"}" ${req ? "" : 'style="opacity:.45;font-weight:400"'}><span class="ic">${done ? icon(ok ? "ok" : "no") : '<span class="spinner" style="margin:0;width:12px;height:12px"></span>'}</span>${NAME[c.name] || c.name}<small>${req ? "must pass" : "not required"}</small></div>`; };
+  if (branch && g.prs[branch]) { const pr = g.prs[branch], cs = pr.checks.filter(c => c.name != "discover");
+    const running = cs.some(c => c.status != "completed"), blocked = cs.some(c => g.required.includes(c.name) && c.conclusion == "failure");
+    out.innerHTML = `<p class="because" style="margin-top:20px">We pushed exactly this change earlier as <b>pull request #${pr.number}</b>. GitHub ran the checker on it:</p>
+      <div class="checks">${cs.map(row).join("")}</div>
+      <div class="verdict ${blocked ? "bad" : running ? "" : "ok"}">${running ? "Still checking…" : blocked ? icon("no") + " Merging is blocked" : icon("ok") + " Allowed"}</div>
+      <p class="because">${blocked ? "The change can't get into the real system. Nobody can override this, not even the owner." : ""}</p>
+      <div class="row-actions" style="margin-top:18px"><a class="act" href="${pr.url}" target="_blank">See it on GitHub</a></div>`; return; }
+  const mine = g.main.find(c => c.name == "gate (" + model + ")"), ok = mine && mine.conclusion == "success";
+  const note = applied == "fix_paperwork" ? " With this fix pushed, its check would turn green and it could be released."
+    : applied ? " This change doesn't help: the checker still says no." : "";
+  out.innerHTML = `<p class="because" style="margin-top:20px">On GitHub, this AI's own check on the current version:</p>
+    <div class="checks">${mine ? row(mine) : ""}</div>
+    <div class="verdict ${ok ? "ok" : "bad"}">${icon(ok ? "ok" : "no")} ${ok ? "Released" : "Not released"}</div>
+    <p class="because">${ok ? "Its check passed, so GitHub's release step ran." : "Its check failed, so GitHub skips the release step. It never goes live."}${note}</p>
+    ${mine ? `<div class="row-actions" style="margin-top:18px"><a class="act" href="${mine.url}" target="_blank">See it on GitHub</a></div>` : ""}`;
+};
+
+async function showFair(e) {
+  if (!e.target.open) return; $("#fairout").innerHTML = wait("Testing both loan AIs on 39,133 real people…");
+  const r = await J("/api/audit"), b = r["income-baseline"], f = r["income-fair"];
+  $("#fairout").innerHTML = `<p class="because">How often each group gets a "yes":</p><div class="legend"><span><i class="sw" style="background:var(--first)"></i>First loan AI</span><span><i class="sw" style="background:var(--fair)"></i>Fair loan AI</span></div>
+   <div class="bars">${b.groups.map((g, i) => `<div class="br"><div class="n">${g.group}</div><div class="pair"><div class="bar" style="width:${g.rate * 140}%;background:var(--first)"><i>${pct(g.rate)}</i></div><div class="bar" style="width:${f.groups[i].rate * 140}%;background:var(--fair)"><i>${pct(f.groups[i].rate)}</i></div></div></div>`).join("")}</div>
+   <p class="because" style="margin-top:20px">Least-approved ÷ best-approved: first loan AI <b style="color:var(--bad)">${b.di.toFixed(2)}</b>, fair loan AI <b style="color:var(--ok)">${f.di.toFixed(2)}</b>. Being fair costs some accuracy: ${pct(b.accuracy)} → ${pct(f.accuracy)}.</p>`;
+}
+
+async function overview() { return O || (O = await J("/api/overview")); }
+function rulesHTML(R) {
+  const T = R.tiers, row = (n, t) => `<div class="tierrow"><b>${n}</b><span>${t}</span></div>`;
+  return `<p style="margin-bottom:10px">Every AI card: ${R.all.join(", ").toLowerCase()}. Every data card: ${R.datasets.join(", ").toLowerCase()}.</p>` +
+    row("Banned", "Can never be released.") +
+    row("High risk", `Also: ${T.high.fields.join(", ").toLowerCase()}; pass the fairness checks; approved by someone who didn't build it.`) +
+    row("Limited risk", `Also: ${T.limited.fields.join(", ").toLowerCase()}.`) + row("Minimal risk", "Only the basics.") +
+    `<div class="row-actions" style="margin-top:16px"><button class="link" onclick="card('registry/policy.yaml')">Open the rule book</button><button class="link" onclick="card('.github/workflows/governance-gate.yml')">Open the GitHub setup</button></div>`;
+}
+window.card = async (p, el) => { const t = await (await fetch("/api/file?p=" + encodeURIComponent(p))).text(), v = $("#cardview");
+  v.innerHTML = `<div class="group-h">${esc(p)}</div><pre>${esc(t)}</pre>`; v.scrollIntoView({behavior: "smooth", block: "center"}); };
+
+let cur = 0;
+const main = $("#main");
+main.innerHTML = STEPS.map((s, i) => `<section class="step" id="s${i}" aria-label="Step ${i + 1}"></section>`).join("");
+$("#dots").innerHTML = STEPS.map((_, i) => `<button aria-label="Go to step ${i + 1}" onclick="go(${i})"><span class="dot" id="d${i}"></span></button>`).join("");
+const loaded = new Set();
+window.go = i => {
+  cur = Math.max(0, Math.min(STEPS.length - 1, i));
+  document.querySelectorAll(".step").forEach(s => s.classList.remove("on"));
+  const sec = $("#s" + cur);
+  if (!loaded.has(cur)) { sec.innerHTML = STEPS[cur].html(); loaded.add(cur); STEPS[cur].run && STEPS[cur].run(); }
+  sec.classList.add("on");
+  STEPS.forEach((_, j) => { $("#d" + j).className = "dot" + (j == cur ? " on" : j < cur ? " done" : ""); });
+  $("#count").textContent = `${cur + 1} of ${STEPS.length}`;
+  $("#back").disabled = cur == 0;
+  $("#next").textContent = STEPS[cur].next || "Continue";
+  window.scrollTo({top: 0}); history.replaceState(null, "", "#" + cur);
+};
+$("#next").onclick = () => STEPS[cur].onNext ? STEPS[cur].onNext() : go(cur == STEPS.length - 1 ? 0 : cur + 1);
+$("#back").onclick = () => go(cur - 1);
+document.addEventListener("keydown", e => { if (e.target.closest("select,input")) return;
+  if (e.key == "ArrowRight") go(cur + 1); if (e.key == "ArrowLeft") go(cur - 1); });
+overview();
+go(+location.hash.slice(1) || 0);
+</script></body></html>
+"""
 
 
 if __name__ == "__main__":

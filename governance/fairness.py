@@ -14,7 +14,7 @@ def spark(cores="*", app="governance"):
     os.environ.setdefault("PYARROW_IGNORE_TIMEZONE", "1")
     return (SparkSession.builder.master(f"local[{cores}]").appName(app)
             .config("spark.driver.memory", os.environ.get("SPARK_DRIVER_MEMORY", "4g"))
-            .config("spark.ui.enabled", "false")
+            .config("spark.ui.enabled", os.environ.get("SPARK_UI", "false"))  # SPARK_UI=true to watch jobs at :4040
             .config("spark.hadoop.fs.defaultFS", "file:///")  # ignore any local HADOOP_CONF_DIR
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .getOrCreate())
